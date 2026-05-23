@@ -1,10 +1,28 @@
-streamlit
-opencv-python-headless
-deepface
-pandas
-numpy
-Pillow
-supabase
-pdfminer.six
-PyMuPDF
-openpyxl
+# Streamlit Cloud - Requirements Otimizados
+# Ordem importante: dependências pesadas primeiro
+
+# Core
+streamlit>=1.28.0
+numpy>=1.24.0,<2.0.0
+pandas>=2.0.0
+Pillow>=10.0.0
+
+# OpenCV - versão headless ESSENCIAL para cloud
+opencv-python-headless==4.8.1.78
+
+# DeepFace e dependências (instalar APÓS opencv)
+tensorflow>=2.13.0,<2.16.0
+deepface>=0.0.89
+
+# Banco de dados
+supabase>=2.0.0
+
+# PDFs
+PyMuPDF>=1.23.0
+pdfminer.six>=20221105
+
+# Excel
+openpyxl>=3.1.0
+
+# Utilitários
+requests>=2.31.0
