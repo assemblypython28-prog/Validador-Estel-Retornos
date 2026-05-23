@@ -1,5 +1,4 @@
-import opencv_python_headless  # Força o ambiente Linux do Streamlit a usar a versão leve
-import cv2 
+import cv2  # O OpenCV correto que vai ler a versão Headless instalada pelo requirements
 import streamlit as st
 import pandas as pd
 import time
@@ -345,7 +344,6 @@ else:
                         st.session_state.dados_conferencia.at[idx, "Quantidade Conferida"] = qtd_conf
                         st.session_state.dados_conferencia.at[idx, "Observações"] = obs
                         
-                        # LINHA CORRIGIDA AQUI:
                         situacao_final = "Conforme" if qtd_conf == linha['Quantidade NF'] else "Divergente"
                         st.session_state.dados_conferencia.at[idx, "Situação"] = situacao_final
                         
