@@ -1,10 +1,6 @@
 libgl1
-libglib2.0-0
+libglib2.0-0t64
 libsm6
 libxext6
-libxrender-dev
+libxrender1
 libgomp1
-libgtk-3-0
-libavcodec-dev
-libavformat-dev
-libswscale-dev
