@@ -20,7 +20,7 @@ st.set_page_config(
 
 st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght=400;500;600;700&display=swap');
     html, body, [class*="css"] { font-family: "Inter", sans-serif; background-color: #F8FAFC; }
     div[data-testid="stMetricValue"] { font-size: 26px; font-weight: 700; color: #1E293B; }
     .stButton>button { width: 100%; border-radius: 8px; height: 42px; background-color: #0284C7; color: white; font-weight: 600; border: none; }
@@ -45,29 +45,28 @@ try:
 except Exception:
     pass
 
+# Inicialização robusta do Session State
 if "autenticado" not in st.session_state: st.session_state.autenticado = False
 if "usuario_nome" not in st.session_state: st.session_state.usuario_nome = ""
 if "dados_conferencia" not in st.session_state: st.session_state.dados_conferencia = pd.DataFrame()
+if "fotos_postadas" not in st.session_state: st.session_state.fotos_postadas = {}
 
 # ============================================================
 # 🧠 VALIDAÇÃO FACIAL COMPATÍVEL E VELOZ (OPENCV)
 # ============================================================
 def verificar_presenca_operador(imagem_st):
-    """Detecta se há um rosto focado na câmera do posto usando Haar Cascade"""
     try:
         image = Image.open(imagem_st)
         image_np = np.array(image.convert('RGB'))
         gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
-        
         face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
         faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
-        
         return len(faces) > 0
     except Exception:
         return False
 
 # ============================================================
-# ⚙️ ENGINES DE EXTRAÇÃO DE DADOS (PDF & EXCEL)
+# ⚙️ ENGINES DE EXTRAÇÃO DE DADOS MÚLTIPLOS (PDF & EXCEL)
 # ============================================================
 FITZ_AVAILABLE = False
 try:
@@ -90,7 +89,7 @@ def extrair_linhas_danfe(pdf_file):
             from io import BytesIO
             full_text = extract_text(BytesIO(pdf_bytes))
         
-        if not full_text: return pd.DataFrame()
+        if not full_text: return []
         linhas = full_text.split("\n")
         modo_captura = False
         
@@ -115,39 +114,54 @@ def extrair_linhas_danfe(pdf_file):
                     except ValueError: pass
                         
                     registros.append({
-                        "Descrição do Produto": desc.strip().upper(), "Quantidade NF": qtd,
-                        "Quantidade Conferida": 0.0, "Situação": "Pendente",
-                        "Foto Capturada": "Não", "Observações": ""
+                        "Arquivo Origem": pdf_file.name,
+                        "Descrição do Produto": desc.strip().upper(), 
+                        "Quantidade NF": qtd,
+                        "Quantidade Conferida": 0.0, 
+                        "Situação": "Pendente",
+                        "Foto Capturada": "Não", 
+                        "Observações": ""
                     })
     except Exception as e:
-        st.error(f"Erro ao processar PDF: {e}")
-    df = pd.DataFrame(registros)
-    if not df.empty: df = df.drop_duplicates(subset=["Descrição do Produto"], keep="first")
-    return df
+        st.error(f"Erro ao processar PDF {pdf_file.name}: {e}")
+    return registros
 
 def extrair_linhas_excel(excel_file):
     try:
         df_cru = pd.read_csv(excel_file, encoding='latin1') if excel_file.name.endswith('.csv') else pd.read_excel(excel_file)
-        if df_cru.empty: return pd.DataFrame()
-        df_formatado = pd.DataFrame()
+        if df_cru.empty: return []
+        
         col_desc = next((c for c in df_cru.columns if "DESCRI" in c.upper()), df_cru.columns[1] if len(df_cru.columns) > 1 else df_cru.columns[0])
         col_qtd = next((c for c in df_cru.columns if "QTD" in c.upper() or "QUANT" in c.upper()), df_cru.columns[0])
-        df_formatado["Descrição do Produto"] = df_cru[col_desc].astype(str).str.strip().str.upper()
-        df_formatado["Quantidade NF"] = pd.to_numeric(df_cru[col_qtd], errors='coerce').fillna(1.0)
-        df_formatado["Quantidade Conferida"] = 0.0
-        df_formatado["Situação"] = "Pendente"
-        df_formatado["Foto Capturada"] = "Não"
-        df_formatado["Observações"] = ""
-        return df_formatado[df_formatado["Descrição do Produto"].str.len() > 2]
-    except Exception: return pd.DataFrame()
+        
+        registros = []
+        for _, row in df_cru.iterrows():
+            desc_val = str(row[col_desc]).strip().upper()
+            if len(desc_val) > 2 and not desc_val.isdigit():
+                try: qtd_val = float(pd.to_numeric(row[col_qtd], errors='coerce'))
+                except: qtd_val = 1.0
+                if np.isnan(qtd_val): qtd_val = 1.0
+                
+                registros.append({
+                    "Arquivo Origem": excel_file.name,
+                    "Descrição do Produto": desc_val,
+                    "Quantidade NF": qtd_val,
+                    "Quantidade Conferida": 0.0,
+                    "Situação": "Pendente",
+                    "Foto Capturada": "Não",
+                    "Observações": ""
+                })
+        return registros
+    except Exception: 
+        return []
 
 # ============================================================
-# 🔐 PAINEL DE AUTENTICAÇÃO (FLUXO ÚNICO SEGURO)
+# 🔐 PAINEL DE AUTENTICAÇÃO
 # ============================================================
 if not st.session_state.autenticado:
     st.markdown("""
         <div style='text-align: center; margin-top: 50px; margin-bottom: 30px;'>
-            <h1 style='color:#0284C7; font-size: 32px;'>🔐 Sistema de Conferência de Materials</h1>
+            <h1 style='color:#0284C7; font-size: 32px;'>🔐 Sistema de Conferência de Materiais</h1>
             <p style='color:#64748B; font-size: 16px;'>Validação do Posto de Triagem - Estel Engenharia</p>
         </div>
     """, unsafe_allow_html=True)
@@ -163,7 +177,7 @@ if not st.session_state.autenticado:
                 rosto_presente = verificar_presenca_operador(foto_scanner)
                 
                 if rosto_presente:
-                    st.success("✅ Presença de operador confirmada em frente à câmera!")
+                    st.success("✅ Presença de operador confirmada!")
                     st.markdown("---")
                     
                     usuario_input = st.text_input("Usuário Logístico (Almoxarifado):")
@@ -220,22 +234,33 @@ else:
     if cab_direito.button("Encerrar Atividades", key="logout"):
         st.session_state.autenticado = False
         st.session_state.dados_conferencia = pd.DataFrame()
+        st.session_state.fotos_postadas = {}
         st.rerun()
         
     st.markdown("---")
     
     with st.sidebar:
-        st.header("📥 Carregar Documento")
-        arquivo_entrada = st.file_uploader("Arraste o DANFE (PDF) ou Excel:", type=["pdf", "xlsx", "xls", "csv"])
+        st.header("📥 Carregar Documentos")
+        # ATUALIZADO: accept_multiple_files=True para permitir vários arquivos ao mesmo tempo
+        arquivos_entrada = st.file_uploader("Arraste DANFEs (PDF) ou Excels simultâneos:", type=["pdf", "xlsx", "xls", "csv"], accept_multiple_files=True)
         
-        if arquivo_entrada:
-            if st.button("Processar Carga de Itens", type="primary", key="btn_processar"):
-                with st.spinner("Extraindo itens..."):
-                    if arquivo_entrada.name.endswith(".pdf"):
-                        st.session_state.dados_conferencia = extrair_linhas_danfe(arquivo_entrada)
-                    else:
-                        st.session_state.dados_conferencia = extrair_linhas_excel(arquivo_entrada)
-                    st.rerun()
+        if arquivos_entrada:
+            if st.button("Processar Carga em Lote", type="primary", key="btn_processar"):
+                all_records = []
+                with st.spinner("Extraindo itens de todos os documentos..."):
+                    for arq in arquivos_entrada:
+                        if arq.name.endswith(".pdf"):
+                            all_records.extend(extrair_linhas_danfe(arq))
+                        else:
+                            all_records.extend(extrair_linhas_excel(arq))
+                    
+                    if all_records:
+                        df_novo = pd.DataFrame(all_records)
+                        # Garante que não repete o mesmo item do mesmo arquivo
+                        df_novo = df_novo.drop_duplicates(subset=["Arquivo Origem", "Descrição do Produto"], keep="first")
+                        st.session_state.dados_conferencia = df_novo
+                        st.success(f"📊 {len(df_novo)} itens carregados com sucesso!")
+                        st.rerun()
         
         if not st.session_state.dados_conferencia.empty:
             st.markdown("---")
@@ -245,64 +270,80 @@ else:
                 st.session_state.dados_conferencia.to_excel(writer, index=False, sheet_name="Conferencia")
             
             st.download_button(
-                label="💾 Exportar Relatório (Excel)", 
+                label="💾 Exportar Relatório Consolidade (Excel)", 
                 data=memoria_excel.getvalue(), 
-                file_name=f"Relatorio_Estel_{time.strftime('%Y%m%d')}.xlsx", 
+                file_name=f"Relatorio_Estel_Lote_{time.strftime('%Y%m%d')}.xlsx", 
                 mime="application/vnd.ms-excel"
             )
-            if st.button("Limpar Carga"):
+            if st.button("Limpar Todos os Itens"):
                 st.session_state.dados_conferencia = pd.DataFrame()
+                st.session_state.fotos_postadas = {}
                 st.rerun()
 
     if st.session_state.dados_conferencia.empty:
-        st.info("💡 **Para iniciar:** Suba um DANFE (PDF) ou planilha Excel no painel lateral.")
+        st.info("💡 **Para iniciar:** Suba um ou mais arquivos de DANFE ou planilhas no painel lateral.")
     else:
-        aba_triagem, aba_tabela, aba_indicadores = st.tabs(["📸 Posto de Triagem & Fotos", "📋 Lista Geral", "📊 Painel de Controle"])
+        aba_triagem, aba_tabela, aba_indicadores = st.tabs(["📸 Posto de Triagem & Fotos", "📋 Lista Geral Consolidade", "📊 Painel de Controle"])
         
         with aba_triagem:
-            lista_insumos = st.session_state.dados_conferencia["Descrição do Produto"].tolist()
-            insumo_selecionado = st.selectbox("Selecione o insumo para conferência:", lista_insumos)
+            # Cria lista composta com arquivo + item para diferenciar itens iguais em notas diferentes
+            df_ref = st.session_state.dados_conferencia
+            opcoes_seletor = [f"[{row['Arquivo Origem']}] - {row['Descrição do Produto']}" for _, row in df_ref.iterrows()]
+            item_composto_selecionado = st.selectbox("Selecione o insumo para conferência:", opcoes_seletor)
             
-            if insumo_selecionado:
-                idx = st.session_state.dados_conferencia[st.session_state.dados_conferencia["Descrição do Produto"] == insumo_selecionado].index[0]
-                linha = st.session_state.dados_conferencia.loc[idx]
+            if item_composto_selecionado:
+                # Extrai os dados reais selecionados
+                arq_nome = item_composto_selecionado.split("] - ")[0].replace("[", "")
+                prod_nome = item_composto_selecionado.split("] - ")[1]
+                
+                idx = df_ref[(df_ref["Arquivo Origem"] == arq_nome) & (df_ref["Descrição do Produto"] == prod_nome)].index[0]
+                linha = df_ref.loc[idx]
                 
                 st.markdown(f"""
                 <div class='card-conferencia'>
-                    <p style='color:#64748B; margin:0;'>Item Selecionado:</p>
+                    <p style='color:#64748B; margin:0;'>Origem: <b>{linha['Arquivo Origem']}</b></p>
                     <h3 style='color:#0284C7; margin:0;'>{linha['Descrição do Produto']}</h3>
-                    <p style='margin:5px 0 0 0;'>Qtd Prevista: <b>{linha['Quantidade NF']}</b> | Status: <b>{linha['Situação']}</b></p>
+                    <p style='margin:5px 0 0 0;'>Qtd NF: <b>{linha['Quantidade NF']}</b> | Status Atual: <b>{linha['Situação']}</b></p>
                 </div>
                 """, unsafe_allow_html=True)
                 
                 col_cam, col_form = st.columns(2)
                 with col_cam:
-                    foto_mat = st.camera_input("Foto do Material:", key=f"mat_{idx}")
+                    # Chave única baseada em índice para evitar conflito de componentes
+                    foto_mat = st.camera_input("Foto do Material (Auditoria):", key=f"cam_{idx}")
                     if foto_mat:
+                        # Salva o arquivo em buffer de memória na sessão para não sumir ao dar refresh
+                        st.session_state.fotos_postadas[idx] = foto_mat.getvalue()
                         st.session_state.dados_conferencia.at[idx, "Foto Capturada"] = "Sim"
+                        st.success("📸 Imagem capturada com sucesso!")
                 
                 with col_form:
                     qtd_conf = st.number_input("Quantidade real descarregada:", min_value=0.0, value=float(linha['Quantidade NF']), key=f"qtd_{idx}")
-                    obs = st.text_area("Observações:", value=linha['Observações'], key=f"obs_{idx}")
+                    obs = st.text_area("Observações de Divergência:", value=linha['Observações'], key=f"obs_{idx}")
                     
-                    if st.button("Confirmar Item", type="primary", key=f"conf_{idx}"):
+                    if st.button("Confirmar e Gravar Item", type="primary", key=f"conf_{idx}"):
                         st.session_state.dados_conferencia.at[idx, "Quantidade Conferida"] = qtd_conf
                         st.session_state.dados_conferencia.at[idx, "Observações"] = obs
                         
                         situacao_final = "Conforme" if qtd_conf == linha['Quantidade NF'] else "Divergente"
                         st.session_state.dados_conferencia.at[idx, "Situação"] = situacao_final
                         
+                        # GRAVAÇÃO EFETIVA NO SUPABASE
                         if supabase and SUPABASE_AVAILABLE:
                             try:
                                 supabase.table("conferencia_itens").insert({
                                     "operador": st.session_state.usuario_nome,
+                                    "nome_arquivo": linha['Arquivo Origem'],
                                     "descricao_produto": linha['Descrição do Produto'],
                                     "quantidade_nf": float(linha['Quantidade NF']),
                                     "quantidade_conferida": float(qtd_conf),
                                     "situacao": situacao_final,
                                     "observacoes": obs
                                 }).execute()
-                            except Exception: pass
+                                st.toast("💾 Gravado com sucesso no Supabase!")
+                            except Exception as e:
+                                st.error(f"Erro ao salvar no banco: {e}")
+                        
                         st.rerun()
 
         with aba_tabela:
@@ -311,6 +352,6 @@ else:
         with aba_indicadores:
             df = st.session_state.dados_conferencia
             c1, c2, c3 = st.columns(3)
-            c1.metric("Total Itens", len(df))
+            c1.metric("Total de Itens Bi-Notas", len(df))
             c2.metric("Conformes", len(df[df["Situação"] == "Conforme"]))
             c3.metric("Divergentes", len(df[df["Situação"] == "Divergente"]))
