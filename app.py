@@ -1,28 +1,11 @@
 import os
-import sys
-import subprocess
 
 # ============================================================
-# CORRECAO DEFINITIVA DO OPENCV (EXECUTA ANTES DE TUDO)
+# CONFIGURACAO DO OPENCV
 # ============================================================
-# O DeepFace instala opencv-python (nao-headless) que quebra no Streamlit Cloud.
-# Esta correcao detecta e substitui automaticamente no runtime.
-os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "0"
+os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '0'
 
-try:
-    import cv2
-    cv2.__version__
-except ImportError:
-    subprocess.check_call([
-        sys.executable, "-m", "pip", "uninstall", "-y",
-        "opencv-python", "opencv-contrib-python"
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.check_call([
-        sys.executable, "-m", "pip", "install", "--no-cache-dir",
-        "opencv-python-headless"
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    import cv2
-
+import cv2
 import streamlit as st
 import pandas as pd
 import time
@@ -32,16 +15,6 @@ import json
 import numpy as np
 from PIL import Image
 from supabase import create_client, Client
-from deepface import DeepFace
-
-# ============================================================
-# CONFIGURACAO VISUAL E ESTILO (DESIGN MODERNO)
-# ============================================================
-st.set_page_config(
-    page_title="Validador de Retorno de Obra - Estel",
-    page_icon="🚚",
-    layout="wide"
-)
 
 st.markdown("""
     <style>
@@ -83,14 +56,25 @@ if "fotos_postadas" not in st.session_state:
     st.session_state.fotos_postadas = {}
 
 # ============================================================
-# ENGENHARIA DE IA FACIAL (DEEPFACE BLINDADO)
+# ENGENHARIA DE IA FACIAL (DEEPFACE LAZY LOAD)
 # ============================================================
+# Importa DeepFace apenas quando necessario para evitar conflitos
+_deepface = None
+
+def get_deepface():
+    global _deepface
+    if _deepface is None:
+        from deepface import DeepFace
+        _deepface = DeepFace
+    return _deepface
+
 def processar_biometria(imagem_st):
     temp_path = "temp_face_input.jpg"
     try:
         img = Image.open(imagem_st)
         img.convert("RGB").save(temp_path)
-        embeddings_data = DeepFace.represent(
+        df = get_deepface()
+        embeddings_data = df.represent(
             img_path=temp_path,
             model_name="Facenet",
             enforce_detection=True,
