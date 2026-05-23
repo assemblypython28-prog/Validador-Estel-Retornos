@@ -290,7 +290,7 @@ if not st.session_state.autenticado:
                             st.session_state.autenticado = True
                             st.session_state.usuario_nome = operador_nome
                             time.sleep(1)
-                            st.rerun()
+                            st.experimental_rerun()
                         else:
                             st.warning("👤 Rosto não localizado na base. Preencha os dados abaixo para vincular sua biometria:")
                             st.session_state.temp_face_vector = vetor_atual
@@ -316,7 +316,7 @@ if not st.session_state.autenticado:
                                             st.session_state.usuario_nome = nome_cad
                                             st.session_state.temp_face_vector = None
                                             time.sleep(1)
-                                            st.rerun()
+                                            st.experimental_rerun()
                                         except Exception as e:
                                             st.error(f"Erro ao salvar: {e}")
                                     else:
@@ -329,7 +329,7 @@ if not st.session_state.autenticado:
                             if u_t == "admin" and s_t == "admin":
                                 st.session_state.autenticado = True
                                 st.session_state.usuario_nome = "Supervisor Local"
-                                st.rerun()
+                                st.experimental_rerun()
                 else:
                     st.error("⚠️ Não foi possível detectar o rosto claramente. Ajuste a iluminação e centralize-se na câmera.")
 
@@ -345,7 +345,7 @@ else:
         st.session_state.autenticado = False
         st.session_state.dados_conferencia = pd.DataFrame()
         st.session_state.fotos_postadas = {}
-        st.rerun()
+        st.experimental_rerun()
         
     st.markdown("---")
     
@@ -373,7 +373,7 @@ else:
                         )
                         st.session_state.dados_conferencia = df_novo
                         st.success(f"📊 {len(df_novo)} itens mapeados com sucesso!")
-                        st.rerun()
+                        st.experimental_rerun()
         
         if not st.session_state.dados_conferencia.empty:
             st.markdown("---")
@@ -392,7 +392,7 @@ else:
             if st.button("Limpar Tudo"):
                 st.session_state.dados_conferencia = pd.DataFrame()
                 st.session_state.fotos_postadas = {}
-                st.rerun()
+                st.experimental_rerun()
 
     if st.session_state.dados_conferencia.empty:
         st.info("💡 **Dica operacional:** Carregue uma ou várias notas fiscais no menu à esquerda para iniciar o processo.")
@@ -486,7 +486,7 @@ else:
                                 st.toast("💾 Dados gravados no Supabase com sucesso!")
                             except Exception as e:
                                 st.error(f"Erro ao sincronizar com banco: {e}")
-                        st.rerun()
+                        st.experimental_rerun()
 
         with aba_tabela:
             st.dataframe(st.session_state.dados_conferencia, use_container_width=True)
