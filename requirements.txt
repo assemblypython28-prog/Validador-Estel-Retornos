@@ -10,9 +10,9 @@ opencv-python-headless==4.8.1.78
 # TensorFlow/Keras - versão compatível com DeepFace
 # TF 2.15 é a última versão estável com Keras 2 integrado
 tensorflow==2.15.0
+keras==2.15.0
 
-# DeepFace
-# Instalar DEPOIS do TensorFlow para evitar conflitos
+# DeepFace - instalar DEPOIS do TF/Keras
 deepface==0.0.89
 
 # Banco de dados
@@ -28,5 +28,4 @@ openpyxl>=3.1.0
 # Utilitários
 requests>=2.31.0
 h5py>=3.10.0
-
 
