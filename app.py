@@ -55,12 +55,14 @@ if "dados_conferencia" not in st.session_state: st.session_state.dados_conferenc
 # ============================================================
 def extrair_vetor_facial(imagem_st):
     """Extrai o embedding facial usando o modelo Facenet (Leve e Preciso)"""
+    temp_path = "temp_face_input.jpg"
     try:
-        temp_path = "temp_face_input.jpg"
         img = Image.open(imagem_st)
+        # Converte e salva em RGB puro para evitar problemas de canais de cor
         img.convert("RGB").save(temp_path)
         
-        embeddings_data = DeepFace.represent(img_path=temp_path, model_name="Facenet", enforce_detection=True)
+        # O detector 'opencv' interno do DeepFace lida bem com imagens salvas
+        embeddings_data = DeepFace.represent(img_path=temp_path, model_name="Facenet", enforce_detection=True, detector_backend="opencv")
         
         if os.path.exists(temp_path):
             os.remove(temp_path)
@@ -69,13 +71,14 @@ def extrair_vetor_facial(imagem_st):
             return embeddings_data[0]["embedding"]
         return None
     except Exception:
-        if os.path.exists(temp_path): os.remove(temp_path)
+        if os.path.exists(temp_path): 
+            os.remove(temp_path)
         return None
 
 def calcular_distancia_cosseno(vetor1, vetor2):
     """Calcula a similaridade entre dois rostos (quanto maior, mais idêntico)"""
     v1, v2 = np.array(vetor1), np.array(vetor2)
-    return np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
+    return float(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2)))
 
 # ============================================================
 # ⚙️ ENGINES DE EXTRAÇÃO DE DADOS (PDF & EXCEL)
@@ -311,7 +314,6 @@ else:
                         st.session_state.dados_conferencia.at[idx, "Quantidade Conferida"] = qtd_conf
                         st.session_state.dados_conferencia.at[idx, "Observações"] = obs
                         
-                        # Linha 322 Corrigida aqui:
                         situacao_final = "Conforme" if qtd_conf == linha['Quantidade NF'] else "Divergente"
                         st.session_state.dados_conferencia.at[idx, "Situação"] = situacao_final
                         
@@ -319,7 +321,7 @@ else:
                             try:
                                 supabase.table("conferencia_itens").insert({
                                     "operador": st.session_state.usuario_nome,
-                                    "descricao_produto": linha['Descrição do Produto'],
+                                    "descricao_produto": inline_desc := linha['Descrição do Produto'],
                                     "quantidade_nf": float(linha['Quantidade NF']),
                                     "quantidade_conferida": float(qtd_conf),
                                     "situacao": situacao_final,
