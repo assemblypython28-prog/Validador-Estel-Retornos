@@ -1,11 +1,31 @@
 import os
+import sys
+import subprocess
 
 # ============================================================
-# CONFIGURACAO DO OPENCV
+# CORRECAO DEFINITIVA DO OPENCV PARA STREAMLIT CLOUD
 # ============================================================
 os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '0'
 
-import cv2
+# Tenta importar cv2. Se falhar, instala headless forcadamente.
+try:
+    import cv2
+    print(f"OpenCV versao: {cv2.__version__}")
+except ImportError:
+    print("Instalando opencv-python-headless...")
+    try:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "--no-cache-dir", "--force-reinstall", 
+             "opencv-python-headless==4.8.0.74"],
+            stdout=sys.stdout, stderr=sys.stderr
+        )
+        import cv2
+        print(f"OpenCV instalado: {cv2.__version__}")
+    except Exception as e:
+        print(f"Erro ao instalar OpenCV: {e}")
+        st.error(f"Erro critico ao instalar OpenCV: {e}")
+        st.stop()
+
 import streamlit as st
 import pandas as pd
 import time
@@ -65,9 +85,8 @@ if "fotos_postadas" not in st.session_state:
     st.session_state.fotos_postadas = {}
 
 # ============================================================
-# ENGENHARIA DE IA FACIAL (DEEPFACE COM FALLBACK)
+# ENGENHARIA DE IA FACIAL (DEEPFACE COM FALLBACK DE BACKENDS)
 # ============================================================
-# Importa DeepFace apenas quando necessario
 _deepface = None
 
 def get_deepface():
@@ -80,8 +99,7 @@ def get_deepface():
 def processar_biometria(imagem_st):
     """
     Captura a foto, detecta o rosto e extrai o vetor matematico (embedding).
-    Tenta multiplos backends: mtcnn (melhor precisao) -> retinaface -> opencv (fallback).
-    Se nenhum detectar, usa enforce_detection=False como ultimo recurso.
+    Tenta multiplos backends: mtcnn (melhor) -> retinaface -> opencv (fallback).
     """
     temp_path = "temp_face_input.jpg"
     try:
@@ -90,7 +108,7 @@ def processar_biometria(imagem_st):
         
         df = get_deepface()
         
-        # Tenta backends na ordem de precisao (do melhor para o mais rapido)
+        # Tenta backends na ordem de precisao
         backends = ["mtcnn", "retinaface", "opencv"]
         embeddings_data = None
         ultimo_erro = ""
@@ -105,22 +123,22 @@ def processar_biometria(imagem_st):
                     align=True
                 )
                 if embeddings_data and len(embeddings_data) > 0:
-                    break  # Conseguiu!
+                    break
             except Exception as e:
                 ultimo_erro = str(e)
-                continue  # Tenta proximo backend
+                continue
         
-        # Se nenhum backend detectou, tenta sem enforce_detection (ultimo recurso)
+        # Fallback: tenta sem enforce_detection
         if not embeddings_data:
             try:
                 embeddings_data = df.represent(
                     img_path=temp_path,
                     model_name="Facenet",
-                    enforce_detection=False,  # Nao exige deteccao
+                    enforce_detection=False,
                     detector_backend="opencv",
                     align=True
                 )
-                st.info("⚠️ Rosto detectado com baixa confianca. Verifique a foto.")
+                st.info("⚠️ Rosto detectado com baixa confianca.")
             except Exception as e:
                 ultimo_erro = str(e)
         
@@ -130,14 +148,13 @@ def processar_biometria(imagem_st):
         if embeddings_data and len(embeddings_data) > 0:
             return embeddings_data[0]["embedding"]
         
-        # Se chegou aqui, nenhum metodo funcionou
-        st.error(f"Detalhes tecnicos: {ultimo_erro[:100]}")
+        st.error(f"Detalhes: {ultimo_erro[:100]}")
         return None
         
     except Exception as e:
         if os.path.exists(temp_path):
             os.remove(temp_path)
-        st.error(f"Erro no processamento: {str(e)[:100]}")
+        st.error(f"Erro: {str(e)[:100]}")
         return None
 
 def calcular_similaridade(vetor1, vetor2):
