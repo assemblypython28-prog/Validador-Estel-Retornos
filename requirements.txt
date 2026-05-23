@@ -1,21 +1,13 @@
-# APENAS UMA VERSÃO DO OPENCV - NUNCA instale opencv-python junto
-opencv-python-headless
+# ⚠️ NÃO coloque opencv-python-headless aqui!
+# O DeepFace já instala o OpenCV que precisa automaticamente.
+# Colocar ambos causa conflito de "Error installing requirements".
 
-# Framework e UI
-streamlit>=1.30.0
-
-# Dados e processamento
+streamlit
 pandas
 numpy
 Pillow
 openpyxl
-
-# IA Facial
 deepface
-
-# Banco de dados
 supabase
-
-# PDF
 pdfminer.six
 PyMuPDF
