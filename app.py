@@ -344,7 +344,9 @@ else:
                     if st.button("Confirmar e Gravar Item", type="primary", key=f"conf_{idx}"):
                         st.session_state.dados_conferencia.at[idx, "Quantidade Conferida"] = qtd_conf
                         st.session_state.dados_conferencia.at[idx, "Observações"] = obs
-                        situacao_final = "Conforme" if qtd_conf == Flux_NF := linha['Quantidade NF'] else "Divergente"
+                        
+                        # LINHA CORRIGIDA AQUI:
+                        situacao_final = "Conforme" if qtd_conf == linha['Quantidade NF'] else "Divergente"
                         st.session_state.dados_conferencia.at[idx, "Situação"] = situacao_final
                         
                         if supabase and SUPABASE_AVAILABLE:
