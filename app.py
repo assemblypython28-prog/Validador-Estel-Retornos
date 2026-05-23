@@ -1,22 +1,11 @@
 import os
-import sys
-import subprocess
 
 # ============================================================
-# CORRECAO AUTOMATICA DO OPENCV (SEM DEPENDENCIA DO SISTEMA)
+# CONFIGURACAO DO OPENCV
 # ============================================================
 os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '0'
 
-try:
-    import cv2
-    cv2.__version__
-except ImportError:
-    subprocess.check_call([
-        sys.executable, "-m", "pip", "install", "--no-cache-dir",
-        "opencv-python-headless==4.8.0.74"
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    import cv2
-
+import cv2
 import streamlit as st
 import pandas as pd
 import time
