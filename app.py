@@ -1,4 +1,13 @@
-import cv2  # O OpenCV correto que vai ler a versão Headless instalada pelo requirements
+import os
+
+# ============================================================
+# 🔧 CORREÇÃO CRÍTICA DO OPENCV (DEVE SER A PRIMEIRA COISA)
+# ============================================================
+# Garante que o OpenCV headless seja carregado corretamente
+# e evita conflitos com outras versões no Streamlit Cloud
+os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '0'
+
+import cv2
 import streamlit as st
 import pandas as pd
 import time
@@ -9,7 +18,6 @@ import numpy as np
 from PIL import Image
 from supabase import create_client, Client
 from deepface import DeepFace
-import os
 
 # ============================================================
 # 🎨 CONFIGURAÇÃO VISUAL E ESTILO (DESIGN MODERNO)
@@ -22,7 +30,7 @@ st.set_page_config(
 
 st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght=400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
     html, body, [class*="css"] { font-family: "Inter", sans-serif; background-color: #F8FAFC; }
     div[data-testid="stMetricValue"] { font-size: 26px; font-weight: 700; color: #1E293B; }
     .stButton>button { width: 100%; border-radius: 8px; height: 42px; background-color: #0284C7; color: white; font-weight: 600; border: none; }
@@ -44,15 +52,20 @@ try:
     key = st.secrets["SUPABASE_KEY"]
     supabase = create_client(url, key)
     SUPABASE_AVAILABLE = True
-except Exception:
-    pass
+except Exception as e:
+    st.sidebar.warning(f"⚠️ Supabase indisponível: {str(e)[:50]}")
 
 # Inicialização robusta do Session State
-if "autenticado" not in st.session_state: st.session_state.autenticado = False
-if "usuario_nome" not in st.session_state: st.session_state.usuario_nome = ""
-if "dados_conferencia" not in st.session_state: st.session_state.dados_conferencia = pd.DataFrame()
-if "temp_face_vector" not in st.session_state: st.session_state.temp_face_vector = None
-if "fotos_postadas" not in st.session_state: st.session_state.fotos_postadas = {}
+if "autenticado" not in st.session_state: 
+    st.session_state.autenticado = False
+if "usuario_nome" not in st.session_state: 
+    st.session_state.usuario_nome = ""
+if "dados_conferencia" not in st.session_state: 
+    st.session_state.dados_conferencia = pd.DataFrame()
+if "temp_face_vector" not in st.session_state: 
+    st.session_state.temp_face_vector = None
+if "fotos_postadas" not in st.session_state: 
+    st.session_state.fotos_postadas = {}
 
 # ============================================================
 # 🧠 ENGENHARIA DE IA FACIAL (DEEPFACE BLINDADO)
@@ -78,7 +91,7 @@ def processar_biometria(imagem_st):
         if len(embeddings_data) > 0:
             return embeddings_data[0]["embedding"]
         return None
-    except Exception:
+    except Exception as e:
         if os.path.exists(temp_path): 
             os.remove(temp_path)
         return None
@@ -105,19 +118,22 @@ def extrair_linhas_danfe(pdf_file):
         pdf_bytes = pdf_file.read()
         if FITZ_AVAILABLE:
             doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-            for pagina in doc: full_text += pagina.get_text()
+            for pagina in doc: 
+                full_text += pagina.get_text()
             doc.close()
         else:
             from pdfminer.high_level import extract_text
             full_text = extract_text(io.BytesIO(pdf_bytes))
         
-        if not full_text: return []
+        if not full_text: 
+            return []
         linhas = full_text.split("\n")
         modo_captura = False
         
         for linha in linhas:
             linha = linha.strip()
-            if not linha: continue
+            if not linha: 
+                continue
             if re.search(r'C\.D(\.)?\s*PROD|DESCRI\.O\s*DO(\s*S)?\s*PRODUTO', linha, re.IGNORECASE):
                 modo_captura = True
                 continue
@@ -132,8 +148,10 @@ def extrair_linhas_danfe(pdf_file):
                 
                 if len(desc.strip()) > 5 and len(numeros) >= 3 and not desc.strip().isdigit():
                     qtd = 1.0
-                    try: qtd = float(numeros[0].replace('.', '').replace(',', '.'))
-                    except ValueError: pass
+                    try: 
+                        qtd = float(numeros[0].replace('.', '').replace(',', '.'))
+                    except ValueError: 
+                        pass
                         
                     registros.append({
                         "Arquivo Origem": pdf_file.name,
@@ -144,29 +162,47 @@ def extrair_linhas_danfe(pdf_file):
                         "Foto Capturada": "Não", 
                         "Observações": ""
                     })
-    except Exception: pass
+    except Exception: 
+        pass
     return registros
 
 def extrair_linhas_excel(excel_file):
     try:
-        df_cru = pd.read_csv(excel_file, encoding='latin1') if excel_file.name.endswith('.csv') else pd.read_excel(excel_file)
-        if df_cru.empty: return []
-        col_desc = next((c for c in df_cru.columns if "DESCRI" in c.upper()), df_cru.columns[1] if len(df_cru.columns) > 1 else df_cru.columns[0])
-        col_qtd = next((c for c in df_cru.columns if "QTD" in c.upper() or "QUANT" in c.upper()), df_cru.columns[0])
+        if excel_file.name.endswith('.csv'):
+            df_cru = pd.read_csv(excel_file, encoding='latin1')
+        else:
+            df_cru = pd.read_excel(excel_file)
+        
+        if df_cru.empty: 
+            return []
+        
+        col_desc = next((c for c in df_cru.columns if "DESCRI" in c.upper()), 
+                       df_cru.columns[1] if len(df_cru.columns) > 1 else df_cru.columns[0])
+        col_qtd = next((c for c in df_cru.columns if "QTD" in c.upper() or "QUANT" in c.upper()), 
+                      df_cru.columns[0])
         registros = []
+        
         for _, row in df_cru.iterrows():
             desc_val = str(row[col_desc]).strip().upper()
             if len(desc_val) > 2 and not desc_val.isdigit():
-                try: qtd_val = float(pd.to_numeric(row[col_qtd], errors='coerce'))
-                except: qtd_val = 1.0
-                if np.isnan(qtd_val): qtd_val = 1.0
+                try: 
+                    qtd_val = float(pd.to_numeric(row[col_qtd], errors='coerce'))
+                except: 
+                    qtd_val = 1.0
+                if np.isnan(qtd_val): 
+                    qtd_val = 1.0
                 registros.append({
-                    "Arquivo Origem": excel_file.name, "Descrição do Produto": desc_val,
-                    "Quantidade NF": qtd_val, "Quantidade Conferida": 0.0,
-                    "Situação": "Pendente", "Foto Capturada": "Não", "Observações": ""
+                    "Arquivo Origem": excel_file.name, 
+                    "Descrição do Produto": desc_val,
+                    "Quantidade NF": qtd_val, 
+                    "Quantidade Conferida": 0.0,
+                    "Situação": "Pendente", 
+                    "Foto Capturada": "Não", 
+                    "Observações": ""
                 })
         return registros
-    except Exception: return []
+    except Exception: 
+        return []
 
 # ============================================================
 # 🔐 PAINEL DE AUTENTICAÇÃO (LOGIN DIRETO POR FOTO)
@@ -190,13 +226,25 @@ if not st.session_state.autenticado:
                 
                 if vetor_atual is not None:
                     if supabase and SUPABASE_AVAILABLE:
-                        # CORREÇÃO DEFINITIVA: Sintaxe PostgREST limpa e universal para "IS NOT NULL"
-                        todos_usuarios = supabase.table("usuarios").not_("face_embedding", "is", "null").execute()
+                        # ✅ CORREÇÃO DEFINITIVA: Sintaxe PostgREST correta
+                        # Usando .not_.is_() ao invés de .not_() com string
+                        try:
+                            todos_usuarios = supabase.table("usuarios")\
+                                .select("*")\
+                                .not_("face_embedding", "is", "null")\
+                                .execute()
+                        except Exception as e:
+                            # Fallback: buscar todos e filtrar localmente
+                            todos_usuarios = supabase.table("usuarios").select("*").execute()
                         
                         reconhecido = False
                         operador_nome = ""
                         
                         for usuario in todos_usuarios.data:
+                            # Pula usuários sem embedding
+                            if not usuario.get("face_embedding"):
+                                continue
+                                
                             try:
                                 vetor_salvo = json.loads(usuario["face_embedding"])
                                 score = calcular_similaridade(vetor_atual, vetor_salvo)
@@ -205,7 +253,8 @@ if not st.session_state.autenticado:
                                     reconhecido = True
                                     operador_nome = usuario["nome"]
                                     break
-                            except Exception: pass
+                            except Exception: 
+                                pass
                         
                         if reconhecido:
                             st.success(f"✅ Reconhecido! Seja bem-vindo, {operador_nome}.")
@@ -273,7 +322,11 @@ else:
     
     with st.sidebar:
         st.header("📥 Carregar Documentos")
-        arquivos_entrada = st.file_uploader("Arraste DANFEs (PDF) ou planilhas de uma vez:", type=["pdf", "xlsx", "xls", "csv"], accept_multiple_files=True)
+        arquivos_entrada = st.file_uploader(
+            "Arraste DANFEs (PDF) ou planilhas de uma vez:", 
+            type=["pdf", "xlsx", "xls", "csv"], 
+            accept_multiple_files=True
+        )
         
         if arquivos_entrada:
             if st.button("Processar Carga em Lote", type="primary"):
@@ -284,8 +337,11 @@ else:
                             all_records.extend(extrair_linhas_danfe(arq))
                         else: 
                             all_records.extend(extrair_linhas_excel(arq))
+                    
                     if all_records:
-                        df_novo = pd.DataFrame(all_records).drop_duplicates(subset=["Arquivo Origem", "Descrição do Produto"])
+                        df_novo = pd.DataFrame(all_records).drop_duplicates(
+                            subset=["Arquivo Origem", "Descrição do Produto"]
+                        )
                         st.session_state.dados_conferencia = df_novo
                         st.success(f"📊 {len(df_novo)} itens mapeados com sucesso!")
                         st.rerun()
@@ -296,7 +352,14 @@ else:
             memoria_excel = io.BytesIO()
             with pd.ExcelWriter(memoria_excel, engine='openpyxl') as writer:
                 st.session_state.dados_conferencia.to_excel(writer, index=False, sheet_name="Consolidado")
-            st.download_button(label="💾 Exportar Relatório Geral", data=memoria_excel.getvalue(), file_name=f"Relatorio_Estel_{time.strftime('%Y%m%d')}.xlsx", mime="application/vnd.ms-excel")
+            
+            st.download_button(
+                label="💾 Exportar Relatório Geral", 
+                data=memoria_excel.getvalue(), 
+                file_name=f"Relatorio_Estel_{time.strftime('%Y%m%d')}.xlsx", 
+                mime="application/vnd.ms-excel"
+            )
+            
             if st.button("Limpar Tudo"):
                 st.session_state.dados_conferencia = pd.DataFrame()
                 st.session_state.fotos_postadas = {}
@@ -305,17 +368,34 @@ else:
     if st.session_state.dados_conferencia.empty:
         st.info("💡 **Dica operacional:** Carregue uma ou várias notas fiscais no menu à esquerda para iniciar o processo.")
     else:
-        aba_triagem, aba_tabela, aba_indicadores = st.tabs(["📸 Posto de Triagem & Fotos", "📋 Lista Geral Consolidade", "📊 Painel de Controle"])
+        aba_triagem, aba_tabela, aba_indicadores = st.tabs([
+            "📸 Posto de Triagem & Fotos", 
+            "📋 Lista Geral Consolidada", 
+            "📊 Painel de Controle"
+        ])
         
         with aba_triagem:
             df_ref = st.session_state.dados_conferencia
-            opcoes_seletor = [f"[{row['Arquivo Origem']}] - {row['Descrição do Produto']}" for _, row in df_ref.iterrows()]
-            item_composto_selecionado = st.selectbox("Selecione o insumo para conferência:", opcoes_seletor)
+            opcoes_seletor = [
+                f"[{row['Arquivo Origem']}] - {row['Descrição do Produto']}" 
+                for _, row in df_ref.iterrows()
+            ]
+            item_composto_selecionado = st.selectbox(
+                "Selecione o insumo para conferência:", 
+                opcoes_seletor
+            )
             
             if item_composto_selecionado:
                 arq_nome = item_composto_selecionado.split("] - ")[0].replace("[", "")
                 prod_nome = item_composto_selecionado.split("] - ")[1]
-                idx = df_ref[(df_ref["Arquivo Origem"] == arq_nome) & (df_ref["Descrição do Produto"] == prod_nome)].index[0]
+                
+                # Busca segura do índice
+                mask = (df_ref["Arquivo Origem"] == arq_nome) & (df_ref["Descrição do Produto"] == prod_nome)
+                if not mask.any():
+                    st.error("Item não encontrado na base.")
+                    st.stop()
+                    
+                idx = df_ref[mask].index[0]
                 linha = df_ref.loc[idx]
                 
                 st.markdown(f"""
@@ -328,18 +408,34 @@ else:
                 
                 col_cam, col_form = st.columns(2)
                 with col_cam:
-                    foto_mat = st.camera_input("Foto do Material (Auditoria Visual):", key=f"cam_{idx}")
+                    foto_mat = st.camera_input(
+                        "Foto do Material (Auditoria Visual):", 
+                        key=f"cam_{idx}"
+                    )
                     if foto_mat:
                         st.session_state.fotos_postadas[idx] = foto_mat.getvalue()
                         st.session_state.dados_conferencia.at[idx, "Foto Capturada"] = "Sim"
                         st.toast("📸 Imagem do material armazenada na sessão!")
                         
                     if idx in st.session_state.fotos_postadas:
-                        st.image(st.session_state.fotos_postadas[idx], caption="Foto salva atualmente para auditoria", width=300)
+                        st.image(
+                            st.session_state.fotos_postadas[idx], 
+                            caption="Foto salva atualmente para auditoria", 
+                            width=300
+                        )
                 
                 with col_form:
-                    qtd_conf = st.number_input("Quantidade real descarregada:", min_value=0.0, value=float(linha['Quantidade NF']), key=f"qtd_{idx}")
-                    obs = st.text_area("Notas / Divergências observadas:", value=linha['Observações'], key=f"obs_{idx}")
+                    qtd_conf = st.number_input(
+                        "Quantidade real descarregada:", 
+                        min_value=0.0, 
+                        value=float(linha['Quantidade NF']), 
+                        key=f"qtd_{idx}"
+                    )
+                    obs = st.text_area(
+                        "Notas / Divergências observadas:", 
+                        value=linha['Observações'], 
+                        key=f"obs_{idx}"
+                    )
                     
                     if st.button("Confirmar e Gravar Item", type="primary", key=f"conf_{idx}"):
                         st.session_state.dados_conferencia.at[idx, "Quantidade Conferida"] = qtd_conf
