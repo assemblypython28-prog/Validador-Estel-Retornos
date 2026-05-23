@@ -1,6 +1,13 @@
+# Streamlit Cloud - Dependências de Sistema (Linux)
+# Necessárias para OpenCV, TensorFlow e DeepFace
+
 libgl1
 libglib2.0-0
 libsm6
 libxext6
 libxrender-dev
 libgomp1
+libgtk-3-0
+libavcodec-dev
+libavformat-dev
+libswscale-dev
