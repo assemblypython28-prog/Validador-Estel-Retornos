@@ -4,69 +4,20 @@ import os
 # CONFIGURACAO DO OPENCV E KERAS (ANTES DE TUDO)
 # ============================================================
 os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '0'
-os.environ['TF_USE_LEGACY_KERAS'] = '1'  # Forca Keras 2 no TensorFlow 2.16+
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Silencia warnings do TensorFlow
+os.environ['TF_USE_LEGACY_KERAS'] = '1'
 
-# --- IMPORTS COM TRATAMENTO DE ERRO ROBUSTO ---
-
-# 1. OpenCV (cv2) - pode falhar em alguns ambientes cloud
-try:
-    import cv2
-    CV2_AVAILABLE = True
-except Exception as e:
-    CV2_AVAILABLE = False
-    cv2 = None
-    print(f"[AVISO] OpenCV (cv2) nao disponivel: {e}")
-
-# 2. Streamlit
-try:
-    import streamlit as st
-    STREAMLIT_AVAILABLE = True
-except Exception as e:
-    STREAMLIT_AVAILABLE = False
-    st = None
-    raise ImportError(f"Streamlit e obrigatorio: {e}")
-
-# 3. Pandas
-try:
-    import pandas as pd
-    PANDAS_AVAILABLE = True
-except Exception as e:
-    PANDAS_AVAILABLE = False
-    pd = None
-    print(f"[AVISO] Pandas nao disponivel: {e}")
-
+import streamlit as st
+import pandas as pd
 import time
 import io
 import re
 import json
-
-try:
-    import numpy as np
-    NUMPY_AVAILABLE = True
-except Exception as e:
-    NUMPY_AVAILABLE = False
-    np = None
-    print(f"[AVISO] NumPy nao disponivel: {e}")
-
-try:
-    from PIL import Image
-    PIL_AVAILABLE = True
-except Exception as e:
-    PIL_AVAILABLE = False
-    Image = None
-    print(f"[AVISO] PIL nao disponivel: {e}")
-
-try:
-    from supabase import create_client, Client
-    SUPABASE_LIB_AVAILABLE = True
-except Exception as e:
-    SUPABASE_LIB_AVAILABLE = False
-    create_client = None
-    Client = None
-    print(f"[AVISO] Supabase nao disponivel: {e}")
+import numpy as np
+from PIL import Image
 
 # ============================================================
-# CONFIGURACAO VISUAL E ESTILO (DESIGN MODERNO)
+# CONFIGURACAO VISUAL E ESTILO
 # ============================================================
 st.set_page_config(
     page_title="Validador de Retorno de Obra - Estel", 
@@ -88,64 +39,68 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # ============================================================
-# CONEXAO COM BANCO DE DADOS (SUPABASE)
+# IMPORTS COM FALLBACK - RECONHECIMENTO FACIAL
 # ============================================================
+CV2_AVAILABLE = False
+DEEPFACE_AVAILABLE = False
 SUPABASE_AVAILABLE = False
-supabase = None
+FITZ_AVAILABLE = False
 
-if SUPABASE_LIB_AVAILABLE:
+try:
+    import cv2
+    CV2_AVAILABLE = True
+except Exception as e:
+    st.sidebar.error(f"❌ OpenCV indisponível: {e}")
+
+try:
+    from deepface import DeepFace
+    DEEPFACE_AVAILABLE = True
+except Exception as e:
+    st.sidebar.warning(f"⚠️ DeepFace indisponível: {e}")
+
+try:
+    from supabase import create_client
+    SUPABASE_AVAILABLE = True
+except Exception as e:
+    st.sidebar.warning(f"⚠️ Supabase indisponível: {e}")
+
+try:
+    import fitz
+    FITZ_AVAILABLE = True
+except ImportError:
+    pass
+
+# ============================================================
+# CONEXAO COM BANCO DE DADOS
+# ============================================================
+supabase = None
+if SUPABASE_AVAILABLE:
     try:
         url = st.secrets["SUPABASE_URL"]
         key = st.secrets["SUPABASE_KEY"]
         supabase = create_client(url, key)
-        SUPABASE_AVAILABLE = True
     except Exception as e:
-        st.sidebar.warning(f"⚠️ Supabase indisponível: {str(e)[:50]}")
+        st.sidebar.warning(f"⚠️ Supabase não conectado: {str(e)[:50]}")
 
-# Inicializacao robusta do Session State
+# Inicializacao do Session State
 if "autenticado" not in st.session_state: 
     st.session_state.autenticado = False
 if "usuario_nome" not in st.session_state: 
     st.session_state.usuario_nome = ""
 if "dados_conferencia" not in st.session_state: 
-    st.session_state.dados_conferencia = pd.DataFrame() if PANDAS_AVAILABLE else []
+    st.session_state.dados_conferencia = pd.DataFrame()
 if "temp_face_vector" not in st.session_state: 
     st.session_state.temp_face_vector = None
 if "fotos_postadas" not in st.session_state: 
     st.session_state.fotos_postadas = {}
 
 # ============================================================
-# ENGENHARIA DE IA FACIAL (DEEPFACE COM FALLBACK DE BACKENDS)
+# ENGENHARIA DE IA FACIAL
 # ============================================================
-DEEPFACE_AVAILABLE = False
-try:
-    from deepface import DeepFace
-    DEEPFACE_AVAILABLE = True
-except Exception as e:
-    DeepFace = None
-    print(f"[AVISO] DeepFace nao disponivel: {e}")
-
-_deepface = None
-
-def get_deepface():
-    global _deepface
-    if _deepface is None and DEEPFACE_AVAILABLE:
-        _deepface = DeepFace
-    return _deepface
-
 def processar_biometria(imagem_st):
-    """
-    Captura a foto, detecta o rosto e extrai o vetor matematico (embedding).
-    Tenta multiplos backends: mtcnn (melhor) -> retinaface -> opencv (fallback).
-    """
-    if not PIL_AVAILABLE:
-        st.error("❌ PIL (Pillow) nao esta disponivel. Nao e possivel processar imagens.")
-        return None
-    if not DEEPFACE_AVAILABLE:
-        st.error("❌ DeepFace nao esta instalado. Instale com: pip install deepface")
-        return None
-    if not NUMPY_AVAILABLE:
-        st.error("❌ NumPy nao esta disponivel.")
+    """Extrai embedding facial da imagem."""
+    if not DEEPFACE_AVAILABLE or not CV2_AVAILABLE:
+        st.error("❌ Reconhecimento facial indisponível. Verifique a instalação do OpenCV e DeepFace.")
         return None
 
     temp_path = "temp_face_input.jpg"
@@ -153,16 +108,13 @@ def processar_biometria(imagem_st):
         img = Image.open(imagem_st)
         img.convert("RGB").save(temp_path)
 
-        df = get_deepface()
-
-        # Tenta backends na ordem de precisao
         backends = ["mtcnn", "retinaface", "opencv"]
         embeddings_data = None
         ultimo_erro = ""
 
         for backend in backends:
             try:
-                embeddings_data = df.represent(
+                embeddings_data = DeepFace.represent(
                     img_path=temp_path,
                     model_name="Facenet",
                     enforce_detection=True,
@@ -175,17 +127,16 @@ def processar_biometria(imagem_st):
                 ultimo_erro = str(e)
                 continue
 
-        # Fallback: tenta sem enforce_detection
         if not embeddings_data:
             try:
-                embeddings_data = df.represent(
+                embeddings_data = DeepFace.represent(
                     img_path=temp_path,
                     model_name="Facenet",
                     enforce_detection=False,
                     detector_backend="opencv",
                     align=True
                 )
-                st.info("⚠️ Rosto detectado com baixa confianca.")
+                st.info("⚠️ Rosto detectado com baixa confiança.")
             except Exception as e:
                 ultimo_erro = str(e)
 
@@ -205,21 +156,12 @@ def processar_biometria(imagem_st):
         return None
 
 def calcular_similaridade(vetor1, vetor2):
-    if not NUMPY_AVAILABLE:
-        return 0.0
     v1, v2 = np.array(vetor1), np.array(vetor2)
     return float(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2)))
 
 # ============================================================
-# ENGINES DE EXTRACAO DE DADOS MULTIPLOS (PDF & EXCEL)
+# EXTRACAO DE DADOS (PDF & EXCEL)
 # ============================================================
-FITZ_AVAILABLE = False
-try:
-    import fitz
-    FITZ_AVAILABLE = True
-except ImportError:
-    pass
-
 def extrair_linhas_danfe(pdf_file):
     registros = []
     full_text = ""
@@ -271,9 +213,6 @@ def extrair_linhas_danfe(pdf_file):
     return registros
 
 def extrair_linhas_excel(excel_file):
-    if not PANDAS_AVAILABLE:
-        st.error("❌ Pandas nao esta disponivel para leitura de Excel/CSV.")
-        return []
     try:
         if excel_file.name.endswith('.csv'):
             df_cru = pd.read_csv(excel_file, encoding='latin1')
@@ -293,7 +232,7 @@ def extrair_linhas_excel(excel_file):
                     qtd_val = float(pd.to_numeric(row[col_qtd], errors='coerce'))
                 except:
                     qtd_val = 1.0
-                if np.isnan(qtd_val) if NUMPY_AVAILABLE else False:
+                if np.isnan(qtd_val):
                     qtd_val = 1.0
                 registros.append({
                     "Arquivo Origem": excel_file.name,
@@ -309,7 +248,7 @@ def extrair_linhas_excel(excel_file):
         return []
 
 # ============================================================
-# PAINEL DE AUTENTICACAO (LOGIN DIRETO POR FOTO)
+# PAINEL DE AUTENTICACAO COM BIOMETRIA
 # ============================================================
 if not st.session_state.autenticado:
     st.markdown("""
@@ -322,99 +261,114 @@ if not st.session_state.autenticado:
     c_esq, c_centro, c_dir = st.columns([1, 1.4, 1])
 
     with c_centro:
-        foto_captura = st.camera_input("Scanner Facial Ativo:", key="scan_facial_posto_unico")
+        # Alerta se biometria indisponível
+        if not DEEPFACE_AVAILABLE or not CV2_AVAILABLE:
+            st.error("""
+            ⚠️ **Reconhecimento Facial Temporariamente Indisponível**
 
-        if foto_captura:
-            with st.spinner("Buscando sua biometria na base corporativa..."):
-                vetor_atual = processar_biometria(foto_captura)
-
-                if vetor_atual is not None:
-                    if supabase and SUPABASE_AVAILABLE:
-                        try:
-                            todos_usuarios = supabase.table("usuarios")\
-                                .select("*")\
-                                .not_("face_embedding", "is", "null")\
-                                .execute()
-                        except Exception:
-                            todos_usuarios = supabase.table("usuarios").select("*").execute()
-
-                        reconhecido = False
-                        operador_nome = ""
-
-                        for usuario in todos_usuarios.data:
-                            if not usuario.get("face_embedding"):
-                                continue
-
-                            try:
-                                vetor_salvo = json.loads(usuario["face_embedding"])
-                                score = calcular_similaridade(vetor_atual, vetor_salvo)
-
-                                if score > 0.85:
-                                    reconhecido = True
-                                    operador_nome = usuario["nome"]
-                                    break
-                            except Exception:
-                                pass
-
-                        if reconhecido:
-                            st.success(f"✅ Reconhecido! Seja bem-vindo, {operador_nome}.")
-                            st.session_state.autenticado = True
-                            st.session_state.usuario_nome = operador_nome
-                            time.sleep(1)
-                            st.experimental_rerun()
-                        else:
-                            st.warning("👤 Rosto não localizado na base. Preencha os dados abaixo para vincular sua biometria:")
-                            st.session_state.temp_face_vector = vetor_atual
-
-                            with st.expander("📝 Criar Novo Cadastro com esta Biometria", expanded=True):
-                                nome_cad = st.text_input("Nome Completo:")
-                                user_cad = st.text_input("ID Usuário Logístico (Login):")
-                                senha_cad = st.text_input("Defina uma Senha:", type="password")
-
-                                if st.button("Salvar Registro e Entrar", type="primary"):
-                                    if nome_cad and user_cad and senha_cad:
-                                        try:
-                                            vetor_json = json.dumps(st.session_state.temp_face_vector)
-                                            supabase.table("usuarios").insert({
-                                                "nome": nome_cad,
-                                                "usuario": user_cad,
-                                                "senha": senha_cad,
-                                                "face_embedding": vetor_json
-                                            }).execute()
-
-                                            st.success("🎉 Cadastro Concluído com Biometria!")
-                                            st.session_state.autenticado = True
-                                            st.session_state.usuario_nome = nome_cad
-                                            st.session_state.temp_face_vector = None
-                                            time.sleep(1)
-                                            st.experimental_rerun()
-                                        except Exception as e:
-                                            st.error(f"Erro ao salvar: {e}")
-                                    else:
-                                        st.error("Por favor, preencha todos os campos do formulário.")
-                    else:
-                        st.info("Supabase Indisponível. Use admin/admin para contingência local.")
-                        u_t = st.text_input("User:")
-                        s_t = st.text_input("Pass:", type="password")
-                        if st.button("Entrar"):
-                            if u_t == "admin" and s_t == "admin":
-                                st.session_state.autenticado = True
-                                st.session_state.usuario_nome = "Supervisor Local"
-                                st.experimental_rerun()
+            O sistema de biometria não pôde ser carregado. Use o login manual abaixo.
+            """)
+            st.info("Login de contingência: **admin** / **admin**")
+            u_t = st.text_input("Usuário:")
+            s_t = st.text_input("Senha:", type="password")
+            if st.button("Entrar", type="primary"):
+                if u_t == "admin" and s_t == "admin":
+                    st.session_state.autenticado = True
+                    st.session_state.usuario_nome = "Supervisor Local"
+                    st.experimental_rerun()
                 else:
-                    st.error("⚠️ Não foi possível detectar o rosto claramente. Ajuste a iluminação e centralize-se na câmera.")
+                    st.error("Credenciais inválidas.")
+        else:
+            foto_captura = st.camera_input("Scanner Facial Ativo:", key="scan_facial_posto_unico")
+
+            if foto_captura:
+                with st.spinner("Buscando sua biometria na base corporativa..."):
+                    vetor_atual = processar_biometria(foto_captura)
+
+                    if vetor_atual is not None:
+                        if supabase and SUPABASE_AVAILABLE:
+                            try:
+                                todos_usuarios = supabase.table("usuarios")\
+                                    .select("*")\
+                                    .not_("face_embedding", "is", "null")\
+                                    .execute()
+                            except Exception:
+                                todos_usuarios = supabase.table("usuarios").select("*").execute()
+
+                            reconhecido = False
+                            operador_nome = ""
+
+                            for usuario in todos_usuarios.data:
+                                if not usuario.get("face_embedding"):
+                                    continue
+                                try:
+                                    vetor_salvo = json.loads(usuario["face_embedding"])
+                                    score = calcular_similaridade(vetor_atual, vetor_salvo)
+                                    if score > 0.85:
+                                        reconhecido = True
+                                        operador_nome = usuario["nome"]
+                                        break
+                                except Exception:
+                                    pass
+
+                            if reconhecido:
+                                st.success(f"✅ Reconhecido! Seja bem-vindo, {operador_nome}.")
+                                st.session_state.autenticado = True
+                                st.session_state.usuario_nome = operador_nome
+                                time.sleep(1)
+                                st.experimental_rerun()
+                            else:
+                                st.warning("👤 Rosto não localizado na base. Preencha os dados abaixo para vincular sua biometria:")
+                                st.session_state.temp_face_vector = vetor_atual
+
+                                with st.expander("📝 Criar Novo Cadastro com esta Biometria", expanded=True):
+                                    nome_cad = st.text_input("Nome Completo:")
+                                    user_cad = st.text_input("ID Usuário Logístico (Login):")
+                                    senha_cad = st.text_input("Defina uma Senha:", type="password")
+
+                                    if st.button("Salvar Registro e Entrar", type="primary"):
+                                        if nome_cad and user_cad and senha_cad:
+                                            try:
+                                                vetor_json = json.dumps(st.session_state.temp_face_vector)
+                                                supabase.table("usuarios").insert({
+                                                    "nome": nome_cad,
+                                                    "usuario": user_cad,
+                                                    "senha": senha_cad,
+                                                    "face_embedding": vetor_json
+                                                }).execute()
+                                                st.success("🎉 Cadastro Concluído com Biometria!")
+                                                st.session_state.autenticado = True
+                                                st.session_state.usuario_nome = nome_cad
+                                                st.session_state.temp_face_vector = None
+                                                time.sleep(1)
+                                                st.experimental_rerun()
+                                            except Exception as e:
+                                                st.error(f"Erro ao salvar: {e}")
+                                        else:
+                                            st.error("Por favor, preencha todos os campos.")
+                        else:
+                            st.info("Supabase Indisponível. Use admin/admin para contingência.")
+                            u_t = st.text_input("User:")
+                            s_t = st.text_input("Pass:", type="password")
+                            if st.button("Entrar"):
+                                if u_t == "admin" and s_t == "admin":
+                                    st.session_state.autenticado = True
+                                    st.session_state.usuario_nome = "Supervisor Local"
+                                    st.experimental_rerun()
+                    else:
+                        st.error("⚠️ Não foi possível detectar o rosto claramente. Ajuste a iluminação e centralize-se.")
 
 # ============================================================
-# PAINEL PRINCIPAL (MULTIPLOS ARQUIVOS EM LOTE)
+# PAINEL PRINCIPAL
 # ============================================================
 else:
     cab_esquerdo, cab_direito = st.columns([4, 1])
     cab_esquerdo.markdown(f"<h1>🚚 Validador de Retornos de Obra</h1>", unsafe_allow_html=True)
-    cab_esquerdo.caption(f"Operador Autenticado por Biometria: **{st.session_state.usuario_nome}**")
+    cab_esquerdo.caption(f"Operador: **{st.session_state.usuario_nome}**")
 
     if cab_direito.button("Encerrar Atividades", key="logout"):
         st.session_state.autenticado = False
-        st.session_state.dados_conferencia = pd.DataFrame() if PANDAS_AVAILABLE else []
+        st.session_state.dados_conferencia = pd.DataFrame()
         st.session_state.fotos_postadas = {}
         st.experimental_rerun()
 
@@ -423,7 +377,7 @@ else:
     with st.sidebar:
         st.header("📥 Carregar Documentos")
         arquivos_entrada = st.file_uploader(
-            "Arraste DANFEs (PDF) ou planilhas de uma vez:",
+            "Arraste DANFEs (PDF) ou planilhas:",
             type=["pdf", "xlsx", "xls", "csv"],
             accept_multiple_files=True
         )
@@ -431,26 +385,22 @@ else:
         if arquivos_entrada:
             if st.button("Processar Carga em Lote", type="primary"):
                 all_records = []
-                with st.spinner("Lendo todos os documentos adicionados..."):
+                with st.spinner("Lendo documentos..."):
                     for arq in arquivos_entrada:
                         if arq.name.endswith(".pdf"):
                             all_records.extend(extrair_linhas_danfe(arq))
                         else:
                             all_records.extend(extrair_linhas_excel(arq))
 
-                    if all_records and PANDAS_AVAILABLE:
+                    if all_records:
                         df_novo = pd.DataFrame(all_records).drop_duplicates(
                             subset=["Arquivo Origem", "Descrição do Produto"]
                         )
                         st.session_state.dados_conferencia = df_novo
-                        st.success(f"📊 {len(df_novo)} itens mapeados com sucesso!")
-                        st.experimental_rerun()
-                    elif all_records:
-                        st.session_state.dados_conferencia = all_records
-                        st.success(f"📊 {len(all_records)} itens mapeados com sucesso!")
+                        st.success(f"📊 {len(df_novo)} itens mapeados!")
                         st.experimental_rerun()
 
-        if PANDAS_AVAILABLE and not st.session_state.dados_conferencia.empty:
+        if not st.session_state.dados_conferencia.empty:
             st.markdown("---")
             st.header("📤 Fechamento")
             memoria_excel = io.BytesIO()
@@ -458,7 +408,7 @@ else:
                 st.session_state.dados_conferencia.to_excel(writer, index=False, sheet_name="Consolidado")
 
             st.download_button(
-                label="💾 Exportar Relatório Geral",
+                label="💾 Exportar Relatório",
                 data=memoria_excel.getvalue(),
                 file_name=f"Relatorio_Estel_{time.strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.ms-excel"
@@ -469,14 +419,12 @@ else:
                 st.session_state.fotos_postadas = {}
                 st.experimental_rerun()
 
-    if PANDAS_AVAILABLE and st.session_state.dados_conferencia.empty:
-        st.info("💡 **Dica operacional:** Carregue uma ou várias notas fiscais no menu à esquerda para iniciar o processo.")
-    elif not PANDAS_AVAILABLE:
-        st.error("❌ Pandas nao esta instalado. Instale com: pip install pandas openpyxl")
+    if st.session_state.dados_conferencia.empty:
+        st.info("💡 Carregue notas fiscais no menu à esquerda para iniciar.")
     else:
         aba_triagem, aba_tabela, aba_indicadores = st.tabs([
-            "📸 Posto de Triagem & Fotos",
-            "📋 Lista Geral Consolidada",
+            "📸 Posto de Triagem",
+            "📋 Lista Consolidada",
             "📊 Painel de Controle"
         ])
 
@@ -487,8 +435,7 @@ else:
                 for _, row in df_ref.iterrows()
             ]
             item_composto_selecionado = st.selectbox(
-                "Selecione o insumo para conferência:",
-                opcoes_seletor
+                "Selecione o insumo:", opcoes_seletor
             )
 
             if item_composto_selecionado:
@@ -497,7 +444,7 @@ else:
 
                 mask = (df_ref["Arquivo Origem"] == arq_nome) & (df_ref["Descrição do Produto"] == prod_nome)
                 if not mask.any():
-                    st.error("Item não encontrado na base.")
+                    st.error("Item não encontrado.")
                     st.stop()
 
                 idx = df_ref[mask].index[0]
@@ -505,47 +452,33 @@ else:
 
                 st.markdown(f"""
                 <div class='card-conferencia'>
-                    <p style='color:#64748B; margin:0;'>Arquivo de Origem: <b>{linha['Arquivo Origem']}</b></p>
+                    <p style='color:#64748B; margin:0;'>Origem: <b>{linha['Arquivo Origem']}</b></p>
                     <h3 style='color:#0284C7; margin:0;'>{linha['Descrição do Produto']}</h3>
-                    <p style='margin:5px 0 0 0;'>Qtd NF Prevista: <b>{linha['Quantidade NF']}</b> | Situação Operacional: <b>{linha['Situação']}</b></p>
+                    <p>Qtd NF: <b>{linha['Quantidade NF']}</b> | Situação: <b>{linha['Situação']}</b></p>
                 </div>
                 """, unsafe_allow_html=True)
 
                 col_cam, col_form = st.columns(2)
                 with col_cam:
-                    foto_mat = st.camera_input(
-                        "Foto do Material (Auditoria Visual):",
-                        key=f"cam_{idx}"
-                    )
+                    foto_mat = st.camera_input("Foto do Material:", key=f"cam_{idx}")
                     if foto_mat:
                         st.session_state.fotos_postadas[idx] = foto_mat.getvalue()
                         st.session_state.dados_conferencia.at[idx, "Foto Capturada"] = "Sim"
-                        st.toast("📸 Imagem do material armazenada na sessão!")
+                        st.toast("📸 Foto armazenada!")
 
                     if idx in st.session_state.fotos_postadas:
-                        st.image(
-                            st.session_state.fotos_postadas[idx],
-                            caption="Foto salva atualmente para auditoria",
-                            width=300
-                        )
+                        st.image(st.session_state.fotos_postadas[idx], caption="Foto auditoria", width=300)
 
                 with col_form:
                     qtd_conf = st.number_input(
-                        "Quantidade real descarregada:",
-                        min_value=0.0,
-                        value=float(linha['Quantidade NF']),
-                        key=f"qtd_{idx}"
+                        "Quantidade real:", min_value=0.0,
+                        value=float(linha['Quantidade NF']), key=f"qtd_{idx}"
                     )
-                    obs = st.text_area(
-                        "Notas / Divergências observadas:",
-                        value=linha['Observações'],
-                        key=f"obs_{idx}"
-                    )
+                    obs = st.text_area("Observações:", value=linha['Observações'], key=f"obs_{idx}")
 
-                    if st.button("Confirmar e Gravar Item", type="primary", key=f"conf_{idx}"):
+                    if st.button("Confirmar", type="primary", key=f"conf_{idx}"):
                         st.session_state.dados_conferencia.at[idx, "Quantidade Conferida"] = qtd_conf
                         st.session_state.dados_conferencia.at[idx, "Observações"] = obs
-
                         situacao_final = "Conforme" if qtd_conf == linha['Quantidade NF'] else "Divergente"
                         st.session_state.dados_conferencia.at[idx, "Situação"] = situacao_final
 
@@ -560,9 +493,9 @@ else:
                                     "situacao": situacao_final,
                                     "observacoes": obs
                                 }).execute()
-                                st.toast("💾 Dados gravados no Supabase com sucesso!")
+                                st.toast("💾 Sincronizado!")
                             except Exception as e:
-                                st.error(f"Erro ao sincronizar com banco: {e}")
+                                st.error(f"Erro sync: {e}")
                         st.experimental_rerun()
 
         with aba_tabela:
@@ -571,6 +504,6 @@ else:
         with aba_indicadores:
             df = st.session_state.dados_conferencia
             c1, c2, c3 = st.columns(3)
-            c1.metric("Total de Insumos Carregados", len(df))
-            c2.metric("Itens Validados Sem Erro", len(df[df["Situação"] == "Conforme"]))
-            c3.metric("Itens Com Divergência", len(df[df["Situação"] == "Divergente"]))
+            c1.metric("Total Insumos", len(df))
+            c2.metric("Conforme", len(df[df["Situação"] == "Conforme"]))
+            c3.metric("Divergente", len(df[df["Situação"] == "Divergente"]))
