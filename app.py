@@ -1,10 +1,11 @@
 import os
 
 # ============================================================
-# CONFIGURACAO DO OPENCV E KERAS (ANTES DE TUDO)
+# CONFIGURACAO DE AMBIENTE (ANTES DE QUALQUER IMPORT)
 # ============================================================
 os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '0'
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Silencia warnings do TensorFlow
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_USE_LEGACY_KERAS'] = '1'
 
 import streamlit as st
 import pandas as pd
@@ -49,19 +50,19 @@ try:
     import cv2
     CV2_AVAILABLE = True
 except Exception as e:
-    st.sidebar.error(f"❌ OpenCV indisponível: {e}")
+    st.sidebar.warning(f"⚠️ OpenCV: {e}")
 
 try:
     from deepface import DeepFace
     DEEPFACE_AVAILABLE = True
 except Exception as e:
-    st.sidebar.warning(f"⚠️ DeepFace indisponível: {e}")
+    st.sidebar.warning(f"⚠️ DeepFace: {e}")
 
 try:
     from supabase import create_client
     SUPABASE_AVAILABLE = True
 except Exception as e:
-    st.sidebar.warning(f"⚠️ Supabase indisponível: {e}")
+    st.sidebar.warning(f"⚠️ Supabase: {e}")
 
 try:
     import fitz
@@ -99,7 +100,7 @@ if "fotos_postadas" not in st.session_state:
 def processar_biometria(imagem_st):
     """Extrai embedding facial da imagem."""
     if not DEEPFACE_AVAILABLE or not CV2_AVAILABLE:
-        st.error("❌ Reconhecimento facial indisponível. Verifique a instalação do OpenCV e DeepFace.")
+        st.error("❌ Reconhecimento facial indisponível.")
         return None
 
     temp_path = "temp_face_input.jpg"
