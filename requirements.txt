@@ -1,6 +1,3 @@
-# Streamlit Cloud - Requirements Otimizados
-# Ordem importante: dependências pesadas primeiro
-
 # Core
 streamlit>=1.28.0
 numpy>=1.24.0,<2.0.0
@@ -10,9 +7,13 @@ Pillow>=10.0.0
 # OpenCV - versão headless ESSENCIAL para cloud
 opencv-python-headless==4.8.1.78
 
-# DeepFace e dependências (instalar APÓS opencv)
-tensorflow>=2.13.0,<2.16.0
-deepface>=0.0.89
+# TensorFlow/Keras - versão compatível com DeepFace
+# TF 2.15 é a última versão estável com Keras 2 integrado
+tensorflow==2.15.0
+
+# DeepFace
+# Instalar DEPOIS do TensorFlow para evitar conflitos
+deepface==0.0.89
 
 # Banco de dados
 supabase>=2.0.0
@@ -26,3 +27,6 @@ openpyxl>=3.1.0
 
 # Utilitários
 requests>=2.31.0
+h5py>=3.10.0
+
+
