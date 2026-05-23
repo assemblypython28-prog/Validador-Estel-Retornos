@@ -6,6 +6,7 @@ import re
 import json
 import numpy as np
 from PIL import Image
+import cv2  # Substituição leve e ultraveloz para visão computacional
 
 # ============================================================
 # 🎨 CONFIGURAÇÃO VISUAL E ESTILO (DESIGN MODERNO)
@@ -57,33 +58,24 @@ if "dados_conferencia" not in st.session_state:
     st.session_state.dados_conferencia = pd.DataFrame()
 
 # ============================================================
-# ⚙️ FUNÇÕES AUXILIARES DE VISÃO COMPUTACIONAL (FACE)
+# ⚙️ DETECÇÃO FACIAL ULTRAVELOZ ENXUTA (OPENCV)
 # ============================================================
-FACE_LIB_AVAILABLE = False
-
-try:
-    import face_recognition
-    FACE_LIB_AVAILABLE = True
-except ImportError:
-    pass
-
-def extrair_vetor_facial(imagem_st):
-    """Converte a imagem capturada da câmera em vetor matemático (embedding) de forma segura"""
-    if not FACE_LIB_AVAILABLE:
-        st.error("Ambiente de biometria não disponível.")
-        return None
-        
+def detectar_presenca_facial(imagem_st):
+    """Detecta de forma ultraveloz se existe um rosto na câmera usando OpenCV"""
     try:
         image = Image.open(imagem_st)
         image_np = np.array(image.convert('RGB'))
-        encodings = face_recognition.face_encodings(image_np)
-        if len(encodings) > 0:
-            return encodings[0]
-        else:
-            return None
+        gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
+        
+        # Carrega o classificador nativo e leve do OpenCV
+        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+        
+        if len(faces) > 0:
+            return True, faces[0]  # Rosto encontrado
+        return False, None
     except Exception as e:
-        st.error(f"Erro ao processar imagem facial: {e}")
-        return None
+        return False, None
 
 # ============================================================
 # ⚙️ ENGINES DE EXTRAÇÃO DE DADOS (PDF & EXCEL)
@@ -104,23 +96,21 @@ def extrair_linhas_danfe(pdf_file):
         pdf_bytes = pdf_file.read()
         
         if FITZ_AVAILABLE:
-            # Usa PyMuPDF (fitz) - método principal ultraveloz
             doc = fitz.open(stream=pdf_bytes, filetype="pdf")
             for pagina in doc:
                 full_text += pagina.get_text()
             doc.close()
         else:
-            # Fallback seguro: tenta usar pdfminer.six se o fitz falhar
             try:
                 from pdfminer.high_level import extract_text
                 from io import BytesIO
                 full_text = extract_text(BytesIO(pdf_bytes))
             except ImportError:
-                st.error("❌ Nenhuma biblioteca de PDF encontrada. Instale `PyMuPDF` ou `pdfminer.six` no requirements.txt")
+                st.error("❌ Nenhuma biblioteca de PDF encontrada no ambiente.")
                 return pd.DataFrame()
         
         if not full_text:
-            st.warning("Não foi possível extrair texto do PDF. O arquivo pode ser uma imagem.")
+            st.warning("Não foi possível extrair texto do PDF.")
             return pd.DataFrame()
             
         linhas = full_text.split("\n")
@@ -131,7 +121,7 @@ def extrair_linhas_danfe(pdf_file):
             if not linha:
                 continue
                 
-            if re.search(r'C\.D(\.)?\s*PROD|DESCRI\.O\s*DO(\s*S)?\\s*PRODUTO', linha, re.IGNORECASE):
+            if re.search(r'C\.D(\.)?\s*PROD|DESCRI\.O\s*DO(\s*S)?\s*PRODUTO', linha, re.IGNORECASE):
                 modo_captura = True
                 continue
                 
@@ -178,11 +168,9 @@ def extrair_linhas_excel(excel_file):
             df_cru = pd.read_excel(excel_file)
             
         if df_cru.empty:
-            st.warning("A planilha carregada está vazia.")
             return pd.DataFrame()
             
         df_formatado = pd.DataFrame()
-        
         col_desc = next((c for c in df_cru.columns if "DESCRI" in c.upper()), df_cru.columns[1] if len(df_cru.columns) > 1 else df_cru.columns[0])
         col_qtd = next((c for c in df_cru.columns if "QTD" in c.upper() or "QUANT" in c.upper()), df_cru.columns[0])
         
@@ -194,18 +182,17 @@ def extrair_linhas_excel(excel_file):
         df_formatado["Observações"] = ""
         
         return df_formatado[df_formatado["Descrição do Produto"].str.len() > 2]
-        
     except Exception as e:
-        st.error(f"Erro na leitura da planilha Excel: {e}")
+        st.error(f"Erro na leitura da planilha: {e}")
         return pd.DataFrame()
 
 # ============================================================
-# 🔐 PAINEL DE AUTENTICAÇÃO (LOGIN BIOMÉTRICO / CORPORATIVO)
+# 🔐 PAINEL DE AUTENTICAÇÃO (INTERFACES DE ACESSO)
 # ============================================================
 if not st.session_state.autenticado:
     st.markdown("""
         <div style='text-align: center; margin-top: 50px; margin-bottom: 30px;'>
-            <h1 style='color:#0284C7; font-size: 32px;'>🔐 Sistema de Conferência de Materials</h1>
+            <h1 style='color:#0284C7; font-size: 32px;'>🔐 Sistema de Conferência de Materiais</h1>
             <p style='color:#64748B; font-size: 16px;'>Validação de Acesso Logístico - Estel Engenharia</p>
         </div>
     """, unsafe_allow_html=True)
@@ -213,45 +200,18 @@ if not st.session_state.autenticado:
     c_esq, c_centro, c_dir = st.columns([1, 1.4, 1])
     
     with c_centro:
-        g_reconhecimento, g_credenciais, g_cadastro_face = st.tabs(["📸 Acesso Facial Direto", "🔑 Login Corporativo", "🧬 Cadastro Biométrico"])
+        g_reconhecimento, g_credenciais = st.tabs(["📸 Validação por Câmera", "🔑 Login Corporativo"])
         
         with g_reconhecimento:
-            if not FACE_LIB_AVAILABLE:
-                st.info("🔄 Configurando visão computacional... Use 'Login Corporativo' temporariamente.")
-            else:
-                st.markdown("<p style='text-align:center; color:#475569;'>Apenas centralize seu rosto na câmera para liberar o painel.</p>", unsafe_allow_html=True)
-                foto_scanner = st.camera_input("Scanner Facial de Entrada:", key="login_facial_direto")
-                
-                if foto_scanner and supabase:
-                    with st.spinner("Analisando biometria..."):
-                        vetor_atual = extrair_vetor_facial(foto_scanner)
-                        
-                        if vetor_atual is not None:
-                            usuarios_banco = supabase.table("usuarios").not_.is_("face_embedding", "null").execute()
-                            
-                            sucesso_login = False
-                            for user in usuarios_banco.data:
-                                vetor_salvo = np.array(json.loads(user["face_embedding"]))
-                                
-                                try:
-                                    match = face_recognition.compare_faces([vetor_salvo], vetor_atual, tolerance=0.45)[0]
-                                check except Exception:
-                                    match = False
-                                
-                                if match:
-                                    st.session_state.autenticado = True
-                                    st.session_state.usuario_nome = user["nome"]
-                                    sucesso_login = True
-                                    st.balloons()
-                                    st.success(f"✅ Bem-vindo, {user['nome']}! Acesso liberado.")
-                                    time.sleep(1)
-                                    st.rerun()
-                                    break
-                            
-                            if not sucesso_login:
-                                st.error("❌ Rosto não reconhecido. Use Usuário/Senha ou faça o Cadastro Facial.")
-                        else:
-                            st.warning("⚠️ Centralize-se em frente à câmera. Nenhum rosto detectado.")
+            st.markdown("<p style='text-align:center; color:#475569;'>Olhe para a câmera para habilitar a validação do operador.</p>", unsafe_allow_html=True)
+            foto_scanner = st.camera_input("Posicione o rosto:", key="login_facial_direto")
+            
+            if foto_scanner:
+                com_rosto, coordenadas = detectar_presenca_facial(foto_scanner)
+                if com_rosto:
+                    st.success("✅ Operador detectado em frente ao posto! Use a aba 'Login Corporativo' para assinar o acesso com suas credenciais.")
+                else:
+                    st.warning("⚠️ Nenhum operador detectado de forma clara na câmera. Centralize seu rosto.")
 
         with g_credenciais:
             usuario_input = st.text_input("Usuário Logístico (Almoxarifado):")
@@ -268,44 +228,12 @@ if not st.session_state.autenticado:
                         else: 
                             st.error("❌ Usuário ou senha incorretos.")
                 else:
-                    # Modo offline de contingência
                     if usuario_input == "admin" and senha_input == "admin":
                         st.session_state.autenticado = True
-                        st.session_state.usuario_nome = "Administrador (Offline)"
+                        st.session_state.usuario_nome = "Administrador (Modo Local)"
                         st.rerun()
                     else:
-                        st.error("❌ Banco de dados offline. Use admin/admin para modo demonstração.")
-
-        with g_cadastro_face:
-            st.markdown("<p style='text-align:center; color:#475569;'>Insira suas credenciais corporativas primeiro para vincular sua biometria.</p>", unsafe_allow_html=True)
-            u_cad = st.text_input("Confirmar Usuário Corporativo:")
-            s_cad = st.text_input("Confirmar Senha Corporativa:", type="password")
-            
-            if not FACE_LIB_AVAILABLE:
-                st.warning("🔄 O ambiente de reconhecimento facial ainda está sendo configurado pelo servidor. Aguarde ou use 'Login Corporativo'.")
-            else:
-                foto_cadastro = st.camera_input("Tirar Foto de Cadastro de Biometria:", key="cadastro_facial_imagem")
-                
-                if st.button("Gravar Biometria Facial no Banco"):
-                    if u_cad and s_cad and foto_cadastro and supabase:
-                        with st.spinner("Validando credenciais corporativas..."):
-                            valida = supabase.table("usuarios").select("*").eq("usuario", u_cad).eq("senha", s_cad).execute()
-                            
-                            if valida.data:
-                                with st.spinner("Mapeando traços biométricos do rosto..."):
-                                    vetor = extrair_vetor_facial(foto_cadastro)
-                                    if vetor is not None:
-                                        lista_vetor = vetor.tolist() 
-                                        supabase.table("usuarios").update({"face_embedding": json.dumps(lista_vetor)}).eq("usuario", u_cad).execute()
-                                        st.success(f"✅ Sucesso! Biometria cadastrada para {valida.data[0]['nome']}.")
-                                        time.sleep(1.5)
-                                        st.rerun()
-                                    else:
-                                        st.error("❌ Não conseguimos processar o rosto. Foque melhor a câmera.")
-                            else:
-                                st.error("❌ Credenciais corporativas de validação incorretas.")
-                    else:
-                        st.warning("⚠️ Preencha usuário, senha e capture a foto antes de salvar.")
+                        st.error("❌ Credenciais inválidas para o modo local (Use admin/admin).")
 
 # ============================================================
 # 🚚 PAINEL PRINCIPAL DO SISTEMA (PÓS-LOGIN)
@@ -341,7 +269,7 @@ else:
                     if not st.session_state.dados_conferencia.empty:
                         st.success(f"✅ Concluído! {len(st.session_state.dados_conferencia)} itens mapeados.")
                     else:
-                        st.warning("Não conseguimos extrair itens válidos. Verifique o arquivo.")
+                        st.warning("Não conseguimos extrair itens válidos.")
         
         st.markdown("---")
         st.header("📤 Fechamento de Auditoria")
