@@ -5,7 +5,6 @@ import os
 # ============================================================
 os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '0'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Silencia warnings do TensorFlow
-os.environ['TF_USE_LEGACY_KERAS'] = '1'
 
 import streamlit as st
 import pandas as pd
