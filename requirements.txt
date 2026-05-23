@@ -1,6 +1,6 @@
 # ⚠️ NÃO coloque opencv-python-headless aqui!
-# O DeepFace já instala o OpenCV que precisa automaticamente.
-# Colocar ambos causa conflito de "Error installing requirements".
+# O DeepFace já instala o OpenCV que precisa.
+# Colocar ambos causa conflito de instalação.
 
 streamlit
 pandas
