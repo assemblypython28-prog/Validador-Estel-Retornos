@@ -3,8 +3,7 @@ import os
 # ============================================================
 # 🔧 CORREÇÃO CRÍTICA DO OPENCV (DEVE SER A PRIMEIRA COISA)
 # ============================================================
-# Garante que o OpenCV headless seja carregado corretamente
-# e evita conflitos com outras versões no Streamlit Cloud
+# Desativa dependência problemática do OpenEXR que quebra no Cloud
 os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '0'
 
 import cv2
@@ -91,7 +90,7 @@ def processar_biometria(imagem_st):
         if len(embeddings_data) > 0:
             return embeddings_data[0]["embedding"]
         return None
-    except Exception as e:
+    except Exception:
         if os.path.exists(temp_path): 
             os.remove(temp_path)
         return None
@@ -226,14 +225,13 @@ if not st.session_state.autenticado:
                 
                 if vetor_atual is not None:
                     if supabase and SUPABASE_AVAILABLE:
-                        # ✅ CORREÇÃO DEFINITIVA: Sintaxe PostgREST correta
-                        # Usando .not_.is_() ao invés de .not_() com string
+                        # ✅ CORREÇÃO DEFINITIVA: Busca com fallback seguro
                         try:
                             todos_usuarios = supabase.table("usuarios")\
                                 .select("*")\
                                 .not_("face_embedding", "is", "null")\
                                 .execute()
-                        except Exception as e:
+                        except Exception:
                             # Fallback: buscar todos e filtrar localmente
                             todos_usuarios = supabase.table("usuarios").select("*").execute()
                         
