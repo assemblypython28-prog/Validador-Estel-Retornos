@@ -1,12 +1,11 @@
-opencv-python-headless
+# requirements.txt — Versão limpa e funcional para Streamlit Cloud
 streamlit
 pandas
 numpy
 Pillow
-supabase
+opencv-python-headless
 deepface
-tf-keras
-PyMuPDF
-pdfminer.six
+supabase
 openpyxl
-altair
+pdfminer.six
+PyMuPDF
