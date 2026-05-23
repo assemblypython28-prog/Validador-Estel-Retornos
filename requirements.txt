@@ -3,7 +3,8 @@ pandas
 numpy
 Pillow
 supabase
-face-recognition
+deepface
+tf-keras
 PyMuPDF
 pdfminer.six
 openpyxl
