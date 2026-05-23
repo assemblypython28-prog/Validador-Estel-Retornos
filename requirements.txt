@@ -4,3 +4,7 @@ pdfplumber
 openpyxl
 supabase
 Pillow
+cmake
+face-recognition
+opencv-python-headless
+numpy
