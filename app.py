@@ -7,8 +7,7 @@ import json
 import numpy as np
 from PIL import Image
 from supabase import create_client, Client
-from deepface import DeepFace
-import os
+import cv2
 
 # ============================================================
 # 🎨 CONFIGURAÇÃO VISUAL E ESTILO (DESIGN MODERNO)
@@ -21,7 +20,7 @@ st.set_page_config(
 
 st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght=400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
     html, body, [class*="css"] { font-family: "Inter", sans-serif; background-color: #F8FAFC; }
     div[data-testid="stMetricValue"] { font-size: 26px; font-weight: 700; color: #1E293B; }
     .stButton>button { width: 100%; border-radius: 8px; height: 42px; background-color: #0284C7; color: white; font-weight: 600; border: none; }
@@ -51,34 +50,21 @@ if "usuario_nome" not in st.session_state: st.session_state.usuario_nome = ""
 if "dados_conferencia" not in st.session_state: st.session_state.dados_conferencia = pd.DataFrame()
 
 # ============================================================
-# 🧠 EXTRAÇÃO BIOMÉTRICA DE ALTA PERFORMANCE (DEEPFACE)
+# 🧠 VALIDAÇÃO FACIAL COMPATÍVEL E VELOZ (OPENCV)
 # ============================================================
-def extrair_vetor_facial(imagem_st):
-    """Extrai o embedding facial usando o modelo Facenet (Leve e Preciso)"""
-    temp_path = "temp_face_input.jpg"
+def verificar_presenca_operador(imagem_st):
+    """Detecta se há um rosto focado na câmera do posto usando Haar Cascade"""
     try:
-        img = Image.open(imagem_st)
-        # Converte e salva em RGB puro para evitar problemas de canais de cor
-        img.convert("RGB").save(temp_path)
+        image = Image.open(imagem_st)
+        image_np = np.array(image.convert('RGB'))
+        gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
         
-        # O detector 'opencv' interno do DeepFace lida bem com imagens salvas
-        embeddings_data = DeepFace.represent(img_path=temp_path, model_name="Facenet", enforce_detection=True, detector_backend="opencv")
+        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
         
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-            
-        if len(embeddings_data) > 0:
-            return embeddings_data[0]["embedding"]
-        return None
+        return len(faces) > 0
     except Exception:
-        if os.path.exists(temp_path): 
-            os.remove(temp_path)
-        return None
-
-def calcular_distancia_cosseno(vetor1, vetor2):
-    """Calcula a similaridade entre dois rostos (quanto maior, mais idêntico)"""
-    v1, v2 = np.array(vetor1), np.array(vetor2)
-    return float(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2)))
+        return False
 
 # ============================================================
 # ⚙️ ENGINES DE EXTRAÇÃO DE DADOS (PDF & EXCEL)
@@ -156,83 +142,72 @@ def extrair_linhas_excel(excel_file):
     except Exception: return pd.DataFrame()
 
 # ============================================================
-# 🔐 PAINEL DE AUTENTICAÇÃO (FLUXO ÚNICO INTELIGENTE)
+# 🔐 PAINEL DE AUTENTICAÇÃO (FLUXO ÚNICO SEGURO)
 # ============================================================
 if not st.session_state.autenticado:
     st.markdown("""
         <div style='text-align: center; margin-top: 50px; margin-bottom: 30px;'>
-            <h1 style='color:#0284C7; font-size: 32px;'>🔐 Sistema de Conferência de Materiais</h1>
-            <p style='color:#64748B; font-size: 16px;'>Identificação Biométrica Sem Fricção - Estel Engenharia</p>
+            <h1 style='color:#0284C7; font-size: 32px;'>🔐 Sistema de Conferência de Materials</h1>
+            <p style='color:#64748B; font-size: 16px;'>Validação do Posto de Triagem - Estel Engenharia</p>
         </div>
     """, unsafe_allow_html=True)
     
     c_esq, c_centro, c_dir = st.columns([1, 1.4, 1])
     
     with c_centro:
-        st.markdown("<p style='text-align:center; color:#475569;'>Sorria para a câmera para entrar no posto ou iniciar seu cadastro.</p>", unsafe_allow_html=True)
-        foto_scanner = st.camera_input("Scanner Facial Ativo:", key="login_deepface_unico")
+        st.markdown("<p style='text-align:center; color:#475569;'>Olhe para a câmera para liberar a assinatura digital do posto.</p>", unsafe_allow_html=True)
+        foto_scanner = st.camera_input("Identificação Visual do Operador:", key="login_validador_posto")
         
         if foto_scanner:
-            with st.spinner("Analisando sua assinatura biométrica..."):
-                vetor_atual = extrair_vetor_facial(foto_scanner)
+            with st.spinner("Verificando enquadramento..."):
+                rosto_presente = verificar_presenca_operador(foto_scanner)
                 
-                if vetor_atual is not None:
-                    if supabase and SUPABASE_AVAILABLE:
-                        usuarios_banco = supabase.table("usuarios").not_.is_("face_embedding", "null").execute()
-                        
-                        operador_reconhecido = None
-                        maior_similaridade = 0.0
-                        
-                        for user in usuarios_banco.data:
-                            vetor_salvo = json.loads(user["face_embedding"])
-                            similaridade = calcular_distancia_cosseno(vetor_atual, vetor_salvo)
+                if rosto_presente:
+                    st.success("✅ Presença de operador confirmada em frente à câmera!")
+                    st.markdown("---")
+                    
+                    usuario_input = st.text_input("Usuário Logístico (Almoxarifado):")
+                    senha_input = st.text_input("Senha Corporativa:", type="password")
+                    
+                    col_btn1, col_btn2 = st.columns(2)
+                    
+                    with col_btn1:
+                        if st.button("Confirmar Entrada e Acessar", type="primary"):
+                            if supabase and SUPABASE_AVAILABLE:
+                                busca = supabase.table("usuarios").select("*").eq("usuario", usuario_input).eq("senha", senha_input).execute()
+                                if busca.data:
+                                    st.session_state.autenticado = True
+                                    st.session_state.usuario_nome = busca.data[0]["nome"]
+                                    st.rerun()
+                                else:
+                                    st.error("❌ Credenciais incorretas.")
+                            else:
+                                if usuario_input == "admin" and senha_input == "admin":
+                                    st.session_state.autenticado = True
+                                    st.session_state.usuario_nome = "Supervisor Logístico (Local)"
+                                    st.rerun()
+                                else:
+                                    st.error("❌ Banco offline. Use admin/admin na contingência.")
+                    
+                    with col_btn2:
+                        with st.expander("📝 Não tem usuário? Cadastre-se agora"):
+                            nome_cad = st.text_input("Nome Completo:")
+                            user_cad = st.text_input("ID Usuário Corporativo:")
+                            senha_cad = st.text_input("Crie uma Senha:", type="password")
                             
-                            if similaridade > 0.85 and similaridade > maior_similaridade:
-                                maior_similaridade = similaridade
-                                operador_reconhecido = user
-                        
-                        if operador_reconhecido:
-                            st.success(f"✅ Reconhecido com Sucesso: Bem-vindo, {operador_reconhecido['nome']}!")
-                            st.session_state.autenticado = True
-                            st.session_state.usuario_nome = operador_reconhecido['nome']
-                            time.sleep(1)
-                            st.rerun()
-                        else:
-                            st.warning("👤 Rosto não localizado na nossa base de dados corporativa.")
-                            with st.expander("📝 Criar seu Primeiro Acesso Biométrico", expanded=True):
-                                nome_cad = st.text_input("Seu Nome Completo:")
-                                user_cad = st.text_input("Usuário Logístico:")
-                                senha_cad = st.text_input("Senha de Assinatura:", type="password")
-                                
-                                if st.button("Finalizar Registro e Fazer Login", type="primary"):
-                                    if nome_cad and user_cad and senha_cad:
-                                        try:
-                                            supabase.table("usuarios").insert({
-                                                "nome": nome_cad,
-                                                "usuario": user_cad,
-                                                "senha": senha_cad,
-                                                "face_embedding": json.dumps(vetor_atual)
-                                            }).execute()
-                                            st.success("🎉 Perfil Criado! Autenticando...")
-                                            st.session_state.autenticado = True
-                                            st.session_state.usuario_nome = nome_cad
-                                            time.sleep(1)
-                                            st.rerun()
-                                        except Exception as e:
-                                            st.error(f"Erro ao salvar dados: {e}")
-                                    else:
-                                        st.error("Preencha todos os campos para salvar.")
-                    else:
-                        st.info("Modo Demonstração local ativo. Use admin/admin na contingência.")
-                        u_test = st.text_input("User:")
-                        s_test = st.text_input("Pass:", type="password")
-                        if st.button("Entrar"):
-                            if u_test == "admin" and s_test == "admin":
-                                st.session_state.autenticado = True
-                                st.session_state.usuario_nome = "Supervisor Offline"
-                                st.rerun()
+                            if st.button("Salvar Registro"):
+                                if nome_cad and user_cad and senha_cad and supabase and SUPABASE_AVAILABLE:
+                                    try:
+                                        supabase.table("usuarios").insert({
+                                            "nome": nome_cad, "usuario": user_cad, "senha": senha_cad
+                                        }).execute()
+                                        st.success("🎉 Cadastrado com sucesso! Insira os dados acima para entrar.")
+                                    except Exception as e:
+                                        st.error(f"Erro ao salvar: {e}")
+                                else:
+                                    st.error("Preencha todos os campos corporativos.")
                 else:
-                    st.error("⚠️ Não conseguimos mapear os traços do seu rosto. Ilumine melhor o ambiente ou centralize-se na câmera.")
+                    st.error("⚠️ Enquadramento inválido. Centralize seu rosto de frente para a câmera.")
 
 # ============================================================
 # 🚚 PAINEL PRINCIPAL DO SISTEMA (PÓS-LOGIN)
@@ -321,7 +296,7 @@ else:
                             try:
                                 supabase.table("conferencia_itens").insert({
                                     "operador": st.session_state.usuario_nome,
-                                    "descricao_produto": inline_desc := linha['Descrição do Produto'],
+                                    "descricao_produto": linha['Descrição do Produto'],
                                     "quantidade_nf": float(linha['Quantidade NF']),
                                     "quantidade_conferida": float(qtd_conf),
                                     "situacao": situacao_final,
