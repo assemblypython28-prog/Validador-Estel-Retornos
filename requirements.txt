@@ -7,13 +7,17 @@ Pillow>=10.0.0
 # OpenCV - versão headless ESSENCIAL para cloud
 opencv-python-headless==4.8.1.78
 
-# TensorFlow/Keras - versão compatível com DeepFace
-# TF 2.15 é a última versão estável com Keras 2 integrado
-tensorflow==2.15.0
+# TensorFlow + Keras 2 - versões fixas e compatíveis
+tensorflow==2.15.1
 keras==2.15.0
+tf-keras==2.15.0
 
-# DeepFace - instalar DEPOIS do TF/Keras
+# DeepFace - versão compatível com TF 2.15
 deepface==0.0.89
+
+# Dependências do DeepFace
+retina-face>=0.0.13
+mtcnn>=0.1.1
 
 # Banco de dados
 supabase>=2.0.0
@@ -28,4 +32,5 @@ openpyxl>=3.1.0
 # Utilitários
 requests>=2.31.0
 h5py>=3.10.0
+protobuf>=3.20.0,<5.0.0
 
