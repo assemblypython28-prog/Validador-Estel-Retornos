@@ -1,9 +1,10 @@
 import os
 
 # ============================================================
-# CONFIGURACAO DO OPENCV
+# CONFIGURACAO DO OPENCV E KERAS (ANTES DE TUDO)
 # ============================================================
 os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '0'
+os.environ['TF_USE_LEGACY_KERAS'] = '1'  # Forca Keras 2 no TensorFlow 2.16+
 
 import cv2
 import streamlit as st
