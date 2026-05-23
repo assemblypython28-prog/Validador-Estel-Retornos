@@ -65,9 +65,9 @@ if "fotos_postadas" not in st.session_state:
     st.session_state.fotos_postadas = {}
 
 # ============================================================
-# ENGENHARIA DE IA FACIAL (DEEPFACE LAZY LOAD)
+# ENGENHARIA DE IA FACIAL (DEEPFACE COM FALLBACK)
 # ============================================================
-# Importa DeepFace apenas quando necessario para evitar conflitos
+# Importa DeepFace apenas quando necessario
 _deepface = None
 
 def get_deepface():
@@ -78,25 +78,66 @@ def get_deepface():
     return _deepface
 
 def processar_biometria(imagem_st):
+    """
+    Captura a foto, detecta o rosto e extrai o vetor matematico (embedding).
+    Tenta multiplos backends: mtcnn (melhor precisao) -> retinaface -> opencv (fallback).
+    Se nenhum detectar, usa enforce_detection=False como ultimo recurso.
+    """
     temp_path = "temp_face_input.jpg"
     try:
         img = Image.open(imagem_st)
         img.convert("RGB").save(temp_path)
+        
         df = get_deepface()
-        embeddings_data = df.represent(
-            img_path=temp_path,
-            model_name="Facenet",
-            enforce_detection=True,
-            detector_backend="opencv"
-        )
+        
+        # Tenta backends na ordem de precisao (do melhor para o mais rapido)
+        backends = ["mtcnn", "retinaface", "opencv"]
+        embeddings_data = None
+        ultimo_erro = ""
+        
+        for backend in backends:
+            try:
+                embeddings_data = df.represent(
+                    img_path=temp_path,
+                    model_name="Facenet",
+                    enforce_detection=True,
+                    detector_backend=backend,
+                    align=True
+                )
+                if embeddings_data and len(embeddings_data) > 0:
+                    break  # Conseguiu!
+            except Exception as e:
+                ultimo_erro = str(e)
+                continue  # Tenta proximo backend
+        
+        # Se nenhum backend detectou, tenta sem enforce_detection (ultimo recurso)
+        if not embeddings_data:
+            try:
+                embeddings_data = df.represent(
+                    img_path=temp_path,
+                    model_name="Facenet",
+                    enforce_detection=False,  # Nao exige deteccao
+                    detector_backend="opencv",
+                    align=True
+                )
+                st.info("⚠️ Rosto detectado com baixa confianca. Verifique a foto.")
+            except Exception as e:
+                ultimo_erro = str(e)
+        
         if os.path.exists(temp_path):
             os.remove(temp_path)
-        if len(embeddings_data) > 0:
+            
+        if embeddings_data and len(embeddings_data) > 0:
             return embeddings_data[0]["embedding"]
+        
+        # Se chegou aqui, nenhum metodo funcionou
+        st.error(f"Detalhes tecnicos: {ultimo_erro[:100]}")
         return None
-    except Exception:
+        
+    except Exception as e:
         if os.path.exists(temp_path):
             os.remove(temp_path)
+        st.error(f"Erro no processamento: {str(e)[:100]}")
         return None
 
 def calcular_similaridade(vetor1, vetor2):
@@ -253,7 +294,7 @@ if not st.session_state.autenticado:
                             time.sleep(1)
                             st.rerun()
                         else:
-                            st.warning("👤 Rosto não localizado. Preencha os dados abaixo para vincular sua biometria:")
+                            st.warning("👤 Rosto não localizado na base. Preencha os dados abaixo para vincular sua biometria:")
                             st.session_state.temp_face_vector = vetor_atual
                             
                             with st.expander("📝 Criar Novo Cadastro com esta Biometria", expanded=True):
