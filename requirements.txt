@@ -3,7 +3,7 @@ pandas
 numpy
 Pillow
 supabase
-opencv-python-headless
+face-recognition
 PyMuPDF
 pdfminer.six
 openpyxl
