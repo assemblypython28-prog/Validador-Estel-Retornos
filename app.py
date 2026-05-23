@@ -17,6 +17,18 @@ import numpy as np
 from PIL import Image
 
 # ============================================================
+# COMPATIBILIDADE: st.rerun() vs st.experimental_rerun()
+# ============================================================
+def safe_rerun():
+    """Executa o rerun compatível com a versão do Streamlit instalada."""
+    if hasattr(st, 'rerun'):
+        st.rerun()
+    elif hasattr(st, 'experimental_rerun'):
+        st.experimental_rerun()
+    else:
+        st.markdown('<meta http-equiv="refresh" content="0">', unsafe_allow_html=True)
+
+# ============================================================
 # CONFIGURACAO VISUAL E ESTILO
 # ============================================================
 st.set_page_config(
@@ -275,7 +287,7 @@ if not st.session_state.autenticado:
                 if u_t == "admin" and s_t == "admin":
                     st.session_state.autenticado = True
                     st.session_state.usuario_nome = "Supervisor Local"
-                    st.experimental_rerun()
+                    safe_rerun()
                 else:
                     st.error("Credenciais inválidas.")
         else:
@@ -316,7 +328,7 @@ if not st.session_state.autenticado:
                                 st.session_state.autenticado = True
                                 st.session_state.usuario_nome = operador_nome
                                 time.sleep(1)
-                                st.experimental_rerun()
+                                safe_rerun()
                             else:
                                 st.warning("👤 Rosto não localizado na base. Preencha os dados abaixo para vincular sua biometria:")
                                 st.session_state.temp_face_vector = vetor_atual
@@ -341,7 +353,7 @@ if not st.session_state.autenticado:
                                                 st.session_state.usuario_nome = nome_cad
                                                 st.session_state.temp_face_vector = None
                                                 time.sleep(1)
-                                                st.experimental_rerun()
+                                                safe_rerun()
                                             except Exception as e:
                                                 st.error(f"Erro ao salvar: {e}")
                                         else:
@@ -354,7 +366,7 @@ if not st.session_state.autenticado:
                                 if u_t == "admin" and s_t == "admin":
                                     st.session_state.autenticado = True
                                     st.session_state.usuario_nome = "Supervisor Local"
-                                    st.experimental_rerun()
+                                    safe_rerun()
                     else:
                         st.error("⚠️ Não foi possível detectar o rosto claramente. Ajuste a iluminação e centralize-se.")
 
@@ -370,7 +382,7 @@ else:
         st.session_state.autenticado = False
         st.session_state.dados_conferencia = pd.DataFrame()
         st.session_state.fotos_postadas = {}
-        st.experimental_rerun()
+        safe_rerun()
 
     st.markdown("---")
 
@@ -398,7 +410,7 @@ else:
                         )
                         st.session_state.dados_conferencia = df_novo
                         st.success(f"📊 {len(df_novo)} itens mapeados!")
-                        st.experimental_rerun()
+                        safe_rerun()
 
         if not st.session_state.dados_conferencia.empty:
             st.markdown("---")
@@ -417,7 +429,7 @@ else:
             if st.button("Limpar Tudo"):
                 st.session_state.dados_conferencia = pd.DataFrame()
                 st.session_state.fotos_postadas = {}
-                st.experimental_rerun()
+                safe_rerun()
 
     if st.session_state.dados_conferencia.empty:
         st.info("💡 Carregue notas fiscais no menu à esquerda para iniciar.")
@@ -496,7 +508,7 @@ else:
                                 st.toast("💾 Sincronizado!")
                             except Exception as e:
                                 st.error(f"Erro sync: {e}")
-                        st.experimental_rerun()
+                        safe_rerun()
 
         with aba_tabela:
             st.dataframe(st.session_state.dados_conferencia, use_container_width=True)
