@@ -1,31 +1,11 @@
 import os
-import sys
-import subprocess
 
 # ============================================================
-# CORRECAO DEFINITIVA DO OPENCV PARA STREAMLIT CLOUD
+# CONFIGURACAO DO OPENCV
 # ============================================================
 os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '0'
 
-# Tenta importar cv2. Se falhar, instala headless forcadamente.
-try:
-    import cv2
-    print(f"OpenCV versao: {cv2.__version__}")
-except ImportError:
-    print("Instalando opencv-python-headless...")
-    try:
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "--no-cache-dir", "--force-reinstall", 
-             "opencv-python-headless==4.8.0.74"],
-            stdout=sys.stdout, stderr=sys.stderr
-        )
-        import cv2
-        print(f"OpenCV instalado: {cv2.__version__}")
-    except Exception as e:
-        print(f"Erro ao instalar OpenCV: {e}")
-        st.error(f"Erro critico ao instalar OpenCV: {e}")
-        st.stop()
-
+import cv2
 import streamlit as st
 import pandas as pd
 import time
