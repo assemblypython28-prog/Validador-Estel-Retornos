@@ -3,7 +3,6 @@ import os
 # ============================================================
 # 🔧 CORREÇÃO CRÍTICA DO OPENCV (DEVE SER A PRIMEIRA COISA)
 # ============================================================
-# Desativa dependência problemática do OpenEXR que quebra no Cloud
 os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '0'
 
 import cv2
@@ -19,7 +18,7 @@ from supabase import create_client, Client
 from deepface import DeepFace
 
 # ============================================================
-# 🎨 CONFIGURAÇÃO VISUAL E ESTILO (DESIGN MODERNO)
+# 🎨 CONFIGURAÇÃO VISUAL E ESTILO
 # ============================================================
 st.set_page_config(
     page_title="Validador de Retorno de Obra - Estel", 
@@ -76,7 +75,6 @@ def processar_biometria(imagem_st):
         img = Image.open(imagem_st)
         img.convert("RGB").save(temp_path)
         
-        # Facenet rodando leve com backend OpenCV padrão
         embeddings_data = DeepFace.represent(
             img_path=temp_path, 
             model_name="Facenet", 
@@ -225,21 +223,18 @@ if not st.session_state.autenticado:
                 
                 if vetor_atual is not None:
                     if supabase and SUPABASE_AVAILABLE:
-                        # ✅ CORREÇÃO DEFINITIVA: Busca com fallback seguro
                         try:
                             todos_usuarios = supabase.table("usuarios")\
                                 .select("*")\
                                 .not_("face_embedding", "is", "null")\
                                 .execute()
                         except Exception:
-                            # Fallback: buscar todos e filtrar localmente
                             todos_usuarios = supabase.table("usuarios").select("*").execute()
                         
                         reconhecido = False
                         operador_nome = ""
                         
                         for usuario in todos_usuarios.data:
-                            # Pula usuários sem embedding
                             if not usuario.get("face_embedding"):
                                 continue
                                 
@@ -387,7 +382,6 @@ else:
                 arq_nome = item_composto_selecionado.split("] - ")[0].replace("[", "")
                 prod_nome = item_composto_selecionado.split("] - ")[1]
                 
-                # Busca segura do índice
                 mask = (df_ref["Arquivo Origem"] == arq_nome) & (df_ref["Descrição do Produto"] == prod_nome)
                 if not mask.any():
                     st.error("Item não encontrado na base.")
