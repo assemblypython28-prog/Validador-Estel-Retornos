@@ -4,8 +4,6 @@ numpy
 Pillow
 supabase
 opencv-python-headless
-deepface
-tf-keras
 PyMuPDF
 pdfminer.six
 openpyxl
