@@ -1,6 +1,6 @@
 streamlit
 pandas
-pdfplumber
+pymupdf  # Substituto oficial e leve para pdfplumber
 openpyxl
 supabase
 Pillow
