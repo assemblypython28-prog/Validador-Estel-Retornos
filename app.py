@@ -190,7 +190,8 @@ if not st.session_state.autenticado:
                 
                 if vetor_atual is not None:
                     if supabase and SUPABASE_AVAILABLE:
-                        todos_usuarios = supabase.table("usuarios").not_.is_("face_embedding", "null").execute()
+                        # CORREÇÃO AQUI: Mudança de .not_.is_() para .neq()
+                        todos_usuarios = supabase.table("usuarios").neq("face_embedding", "null").execute()
                         
                         reconhecido = False
                         operador_nome = ""
