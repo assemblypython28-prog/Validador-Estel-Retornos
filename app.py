@@ -1,11 +1,22 @@
 import os
+import sys
+import subprocess
 
 # ============================================================
-# CONFIGURACAO DO OPENCV
+# CORRECAO AUTOMATICA DO OPENCV (SEM DEPENDENCIA DO SISTEMA)
 # ============================================================
 os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '0'
 
-import cv2
+try:
+    import cv2
+    cv2.__version__
+except ImportError:
+    subprocess.check_call([
+        sys.executable, "-m", "pip", "install", "--no-cache-dir",
+        "opencv-python-headless==4.8.0.74"
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    import cv2
+
 import streamlit as st
 import pandas as pd
 import time
@@ -15,6 +26,15 @@ import json
 import numpy as np
 from PIL import Image
 from supabase import create_client, Client
+
+# ============================================================
+# CONFIGURACAO VISUAL E ESTILO (DESIGN MODERNO)
+# ============================================================
+st.set_page_config(
+    page_title="Validador de Retorno de Obra - Estel", 
+    page_icon="🚚", 
+    layout="wide"
+)
 
 st.markdown("""
     <style>
@@ -44,15 +64,15 @@ except Exception as e:
     st.sidebar.warning(f"⚠️ Supabase indisponível: {str(e)[:50]}")
 
 # Inicializacao robusta do Session State
-if "autenticado" not in st.session_state:
+if "autenticado" not in st.session_state: 
     st.session_state.autenticado = False
-if "usuario_nome" not in st.session_state:
+if "usuario_nome" not in st.session_state: 
     st.session_state.usuario_nome = ""
-if "dados_conferencia" not in st.session_state:
+if "dados_conferencia" not in st.session_state: 
     st.session_state.dados_conferencia = pd.DataFrame()
-if "temp_face_vector" not in st.session_state:
+if "temp_face_vector" not in st.session_state: 
     st.session_state.temp_face_vector = None
-if "fotos_postadas" not in st.session_state:
+if "fotos_postadas" not in st.session_state: 
     st.session_state.fotos_postadas = {}
 
 # ============================================================
@@ -199,12 +219,16 @@ if not st.session_state.autenticado:
             <p style='color:#64748B; font-size: 16px;'>Tire uma foto para logar instantaneamente ou criar seu perfil.</p>
         </div>
     """, unsafe_allow_html=True)
+    
     c_esq, c_centro, c_dir = st.columns([1, 1.4, 1])
+    
     with c_centro:
         foto_captura = st.camera_input("Scanner Facial Ativo:", key="scan_facial_posto_unico")
+        
         if foto_captura:
             with st.spinner("Buscando sua biometria na base corporativa..."):
                 vetor_atual = processar_biometria(foto_captura)
+                
                 if vetor_atual is not None:
                     if supabase and SUPABASE_AVAILABLE:
                         try:
@@ -214,20 +238,25 @@ if not st.session_state.autenticado:
                                 .execute()
                         except Exception:
                             todos_usuarios = supabase.table("usuarios").select("*").execute()
+                        
                         reconhecido = False
                         operador_nome = ""
+                        
                         for usuario in todos_usuarios.data:
                             if not usuario.get("face_embedding"):
                                 continue
+                                
                             try:
                                 vetor_salvo = json.loads(usuario["face_embedding"])
                                 score = calcular_similaridade(vetor_atual, vetor_salvo)
+                                
                                 if score > 0.85:
                                     reconhecido = True
                                     operador_nome = usuario["nome"]
                                     break
                             except Exception:
                                 pass
+                        
                         if reconhecido:
                             st.success(f"✅ Reconhecido! Seja bem-vindo, {operador_nome}.")
                             st.session_state.autenticado = True
@@ -237,10 +266,12 @@ if not st.session_state.autenticado:
                         else:
                             st.warning("👤 Rosto não localizado. Preencha os dados abaixo para vincular sua biometria:")
                             st.session_state.temp_face_vector = vetor_atual
+                            
                             with st.expander("📝 Criar Novo Cadastro com esta Biometria", expanded=True):
                                 nome_cad = st.text_input("Nome Completo:")
                                 user_cad = st.text_input("ID Usuário Logístico (Login):")
                                 senha_cad = st.text_input("Defina uma Senha:", type="password")
+                                
                                 if st.button("Salvar Registro e Entrar", type="primary"):
                                     if nome_cad and user_cad and senha_cad:
                                         try:
@@ -251,6 +282,7 @@ if not st.session_state.autenticado:
                                                 "senha": senha_cad,
                                                 "face_embedding": vetor_json
                                             }).execute()
+                                            
                                             st.success("🎉 Cadastro Concluído com Biometria!")
                                             st.session_state.autenticado = True
                                             st.session_state.usuario_nome = nome_cad
@@ -280,12 +312,15 @@ else:
     cab_esquerdo, cab_direito = st.columns([4, 1])
     cab_esquerdo.markdown(f"<h1>🚚 Validador de Retornos de Obra</h1>", unsafe_allow_html=True)
     cab_esquerdo.caption(f"Operador Autenticado por Biometria: **{st.session_state.usuario_nome}**")
+    
     if cab_direito.button("Encerrar Atividades", key="logout"):
         st.session_state.autenticado = False
         st.session_state.dados_conferencia = pd.DataFrame()
         st.session_state.fotos_postadas = {}
         st.rerun()
+        
     st.markdown("---")
+    
     with st.sidebar:
         st.header("📥 Carregar Documentos")
         arquivos_entrada = st.file_uploader(
@@ -293,6 +328,7 @@ else:
             type=["pdf", "xlsx", "xls", "csv"],
             accept_multiple_files=True
         )
+        
         if arquivos_entrada:
             if st.button("Processar Carga em Lote", type="primary"):
                 all_records = []
@@ -302,6 +338,7 @@ else:
                             all_records.extend(extrair_linhas_danfe(arq))
                         else:
                             all_records.extend(extrair_linhas_excel(arq))
+                    
                     if all_records:
                         df_novo = pd.DataFrame(all_records).drop_duplicates(
                             subset=["Arquivo Origem", "Descrição do Produto"]
@@ -309,22 +346,26 @@ else:
                         st.session_state.dados_conferencia = df_novo
                         st.success(f"📊 {len(df_novo)} itens mapeados com sucesso!")
                         st.rerun()
+        
         if not st.session_state.dados_conferencia.empty:
             st.markdown("---")
             st.header("📤 Fechamento")
             memoria_excel = io.BytesIO()
             with pd.ExcelWriter(memoria_excel, engine='openpyxl') as writer:
                 st.session_state.dados_conferencia.to_excel(writer, index=False, sheet_name="Consolidado")
+            
             st.download_button(
                 label="💾 Exportar Relatório Geral",
                 data=memoria_excel.getvalue(),
                 file_name=f"Relatorio_Estel_{time.strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.ms-excel"
             )
+            
             if st.button("Limpar Tudo"):
                 st.session_state.dados_conferencia = pd.DataFrame()
                 st.session_state.fotos_postadas = {}
                 st.rerun()
+
     if st.session_state.dados_conferencia.empty:
         st.info("💡 **Dica operacional:** Carregue uma ou várias notas fiscais no menu à esquerda para iniciar o processo.")
     else:
@@ -333,6 +374,7 @@ else:
             "📋 Lista Geral Consolidada",
             "📊 Painel de Controle"
         ])
+        
         with aba_triagem:
             df_ref = st.session_state.dados_conferencia
             opcoes_seletor = [
@@ -343,15 +385,19 @@ else:
                 "Selecione o insumo para conferência:",
                 opcoes_seletor
             )
+            
             if item_composto_selecionado:
                 arq_nome = item_composto_selecionado.split("] - ")[0].replace("[", "")
                 prod_nome = item_composto_selecionado.split("] - ")[1]
+                
                 mask = (df_ref["Arquivo Origem"] == arq_nome) & (df_ref["Descrição do Produto"] == prod_nome)
                 if not mask.any():
                     st.error("Item não encontrado na base.")
                     st.stop()
+                    
                 idx = df_ref[mask].index[0]
                 linha = df_ref.loc[idx]
+                
                 st.markdown(f"""
                 <div class='card-conferencia'>
                     <p style='color:#64748B; margin:0;'>Arquivo de Origem: <b>{linha['Arquivo Origem']}</b></p>
@@ -359,6 +405,7 @@ else:
                     <p style='margin:5px 0 0 0;'>Qtd NF Prevista: <b>{linha['Quantidade NF']}</b> | Situação Operacional: <b>{linha['Situação']}</b></p>
                 </div>
                 """, unsafe_allow_html=True)
+                
                 col_cam, col_form = st.columns(2)
                 with col_cam:
                     foto_mat = st.camera_input(
@@ -369,12 +416,14 @@ else:
                         st.session_state.fotos_postadas[idx] = foto_mat.getvalue()
                         st.session_state.dados_conferencia.at[idx, "Foto Capturada"] = "Sim"
                         st.toast("📸 Imagem do material armazenada na sessão!")
+                        
                     if idx in st.session_state.fotos_postadas:
                         st.image(
                             st.session_state.fotos_postadas[idx],
                             caption="Foto salva atualmente para auditoria",
                             width=300
                         )
+                
                 with col_form:
                     qtd_conf = st.number_input(
                         "Quantidade real descarregada:",
@@ -387,11 +436,14 @@ else:
                         value=linha['Observações'],
                         key=f"obs_{idx}"
                     )
+                    
                     if st.button("Confirmar e Gravar Item", type="primary", key=f"conf_{idx}"):
                         st.session_state.dados_conferencia.at[idx, "Quantidade Conferida"] = qtd_conf
                         st.session_state.dados_conferencia.at[idx, "Observações"] = obs
+                        
                         situacao_final = "Conforme" if qtd_conf == linha['Quantidade NF'] else "Divergente"
                         st.session_state.dados_conferencia.at[idx, "Situação"] = situacao_final
+                        
                         if supabase and SUPABASE_AVAILABLE:
                             try:
                                 supabase.table("conferencia_itens").insert({
@@ -407,8 +459,10 @@ else:
                             except Exception as e:
                                 st.error(f"Erro ao sincronizar com banco: {e}")
                         st.rerun()
+
         with aba_tabela:
             st.dataframe(st.session_state.dados_conferencia, use_container_width=True)
+
         with aba_indicadores:
             df = st.session_state.dados_conferencia
             c1, c2, c3 = st.columns(3)
