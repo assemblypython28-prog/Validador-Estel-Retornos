@@ -56,15 +56,12 @@ if "dados_conferencia" not in st.session_state: st.session_state.dados_conferenc
 def extrair_vetor_facial(imagem_st):
     """Extrai o embedding facial usando o modelo Facenet (Leve e Preciso)"""
     try:
-        # Salva temporariamente a imagem capturada para o DeepFace ler
         temp_path = "temp_face_input.jpg"
         img = Image.open(imagem_st)
         img.convert("RGB").save(temp_path)
         
-        # Extrai o vetor matemático do rosto usando o Facenet
         embeddings_data = DeepFace.represent(img_path=temp_path, model_name="Facenet", enforce_detection=True)
         
-        # Remove o arquivo temporário
         if os.path.exists(temp_path):
             os.remove(temp_path)
             
@@ -72,12 +69,11 @@ def extrair_vetor_facial(imagem_st):
             return embeddings_data[0]["embedding"]
         return None
     except Exception:
-        # Retorna None se não achar rosto ou der erro
         if os.path.exists(temp_path): os.remove(temp_path)
         return None
 
 def calcular_distancia_cosseno(vetor1, vetor2):
-    """Calcula a similaridade entre dois rostos (quanto menor, mais idêntico)"""
+    """Calcula a similaridade entre dois rostos (quanto maior, mais idêntico)"""
     v1, v2 = np.array(vetor1), np.array(vetor2)
     return np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
 
@@ -178,19 +174,16 @@ if not st.session_state.autenticado:
                 vetor_atual = extrair_vetor_facial(foto_scanner)
                 
                 if vetor_atual is not None:
-                    # Busca todos os usuários cadastrados no Supabase
                     if supabase and SUPABASE_AVAILABLE:
                         usuarios_banco = supabase.table("usuarios").not_.is_("face_embedding", "null").execute()
                         
                         operador_reconhecido = None
                         maior_similaridade = 0.0
                         
-                        # Varre o banco calculando a proximidade matemática dos rostos
                         for user in usuarios_banco.data:
                             vetor_salvo = json.loads(user["face_embedding"])
                             similaridade = calcular_distancia_cosseno(vetor_atual, vetor_salvo)
                             
-                            # No cosseno, acima de 0.85 indica que é a mesma pessoa (Facenet)
                             if similaridade > 0.85 and similaridade > maior_similaridade:
                                 maior_similaridade = similaridade
                                 operador_reconhecido = user
@@ -202,7 +195,6 @@ if not st.session_state.autenticado:
                             time.sleep(1)
                             st.rerun()
                         else:
-                            # FLUXO DE AUTO-CADASTRO (Se não achar o rosto)
                             st.warning("👤 Rosto não localizado na nossa base de dados corporativa.")
                             with st.expander("📝 Criar seu Primeiro Acesso Biométrico", expanded=True):
                                 nome_cad = st.text_input("Seu Nome Completo:")
@@ -228,7 +220,6 @@ if not st.session_state.autenticado:
                                     else:
                                         st.error("Preencha todos os campos para salvar.")
                     else:
-                        # Fallback Modo Demonstração Local
                         st.info("Modo Demonstração local ativo. Use admin/admin na contingência.")
                         u_test = st.text_input("User:")
                         s_test = st.text_input("Pass:", type="password")
@@ -319,7 +310,10 @@ else:
                     if st.button("Confirmar Item", type="primary", key=f"conf_{idx}"):
                         st.session_state.dados_conferencia.at[idx, "Quantidade Conferida"] = qtd_conf
                         st.session_state.dados_conferencia.at[idx, "Observações"] = obs
-                        st.session_state.dados_conferencia.at[idx, "Situação"] = "Conforme" if qtd_conf == inline_nf := linha['Quantidade NF'] else "Divergente"
+                        
+                        # Linha 322 Corrigida aqui:
+                        situacao_final = "Conforme" if qtd_conf == linha['Quantidade NF'] else "Divergente"
+                        st.session_state.dados_conferencia.at[idx, "Situação"] = situacao_final
                         
                         if supabase and SUPABASE_AVAILABLE:
                             try:
@@ -328,7 +322,7 @@ else:
                                     "descricao_produto": linha['Descrição do Produto'],
                                     "quantidade_nf": float(linha['Quantidade NF']),
                                     "quantidade_conferida": float(qtd_conf),
-                                    "situacao": "Conforme" if qtd_conf == linha['Quantidade NF'] else "Divergente",
+                                    "situacao": situacao_final,
                                     "observacoes": obs
                                 }).execute()
                             except Exception: pass
