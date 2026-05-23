@@ -1,11 +1,21 @@
-# requirements.txt — Versão limpa e funcional para Streamlit Cloud
-streamlit
+# APENAS UMA VERSÃO DO OPENCV - NUNCA instale opencv-python junto
+opencv-python-headless
+
+# Framework e UI
+streamlit>=1.30.0
+
+# Dados e processamento
 pandas
 numpy
 Pillow
-opencv-python-headless
-deepface
-supabase
 openpyxl
+
+# IA Facial
+deepface
+
+# Banco de dados
+supabase
+
+# PDF
 pdfminer.six
 PyMuPDF
