@@ -451,9 +451,9 @@ if not st.session_state.autenticado:
                 st.image(foto_upload, caption="Foto selecionada", width=200)
         
         if foto_captura:
-            with st.spinner("Buscando sua biometria na base corporativa..."):
+            with st.spinner("🔍 Analisando biometria... (pode levar alguns segundos)"):
                 vetor_atual = processar_biometria(foto_captura)
-                
+
                 if vetor_atual is not None:
                     if supabase and SUPABASE_AVAILABLE:
                         try:
@@ -463,41 +463,46 @@ if not st.session_state.autenticado:
                                 .execute()
                         except Exception:
                             todos_usuarios = supabase.table("usuarios").select("*").execute()
-                        
+
                         reconhecido = False
                         operador_nome = ""
-                        
+                        melhor_score = 0.0
+
                         for usuario in todos_usuarios.data:
                             if not usuario.get("face_embedding"):
                                 continue
-                                
+
                             try:
                                 vetor_salvo = json.loads(usuario["face_embedding"])
                                 score = calcular_similaridade(vetor_atual, vetor_salvo)
-                                
+
+                                if score > melhor_score:
+                                    melhor_score = score
+
                                 if score > 0.70:
                                     reconhecido = True
                                     operador_nome = usuario["nome"]
                                     break
                             except Exception:
                                 pass
-                        
-                        st.success(f"✅ Reconhecido! Seja bem-vindo, {operador_nome}.")
-                        st.info(f"📊 Score de confiança: {score:.1%}")
+
+                        if reconhecido:
+                            st.success(f"✅ Reconhecido! Seja bem-vindo, {operador_nome}.")
+                            st.info(f"📊 Score de confiança: {melhor_score:.1%}")
                             st.session_state.autenticado = True
                             st.session_state.usuario_nome = operador_nome
                             time.sleep(1)
                             safe_rerun()
                         else:
                             st.warning("👤 Rosto não localizado na base. Preencha os dados abaixo para vincular sua biometria:")
-                        st.caption(f"📊 Melhor score encontrado: {score:.1%} (mínimo: 70%)")
+                            st.caption(f"📊 Melhor score encontrado: {melhor_score:.1%} (mínimo: 70%)")
                             st.session_state.temp_face_vector = vetor_atual
-                            
+
                             with st.expander("📝 Criar Novo Cadastro com esta Biometria", expanded=True):
                                 nome_cad = st.text_input("Nome Completo:")
                                 user_cad = st.text_input("ID Usuário Logístico (Login):")
                                 senha_cad = st.text_input("Defina uma Senha:", type="password")
-                                
+
                                 if st.button("Salvar Registro e Entrar", type="primary"):
                                     if nome_cad and user_cad and senha_cad:
                                         try:
@@ -508,7 +513,7 @@ if not st.session_state.autenticado:
                                                 "senha": senha_cad,
                                                 "face_embedding": vetor_json
                                             }).execute()
-                                            
+
                                             st.success("🎉 Cadastro Concluído com Biometria!")
                                             st.session_state.autenticado = True
                                             st.session_state.usuario_nome = nome_cad
@@ -529,9 +534,7 @@ if not st.session_state.autenticado:
                                 st.session_state.usuario_nome = "Supervisor Local"
                                 safe_rerun()
                 else:
-                    st.error("⚠️ Não foi possível detectar o rosto claramente. Ajuste a iluminação e centralize-se na câmera.")
-
-# ============================================================
+                    st.error("⚠️ Não foi possível detectar o rosto claramente. Ajuste a iluminação e centralize-se na câmera.")# ============================================================
 # PAINEL PRINCIPAL (MULTIPLOS ARQUIVOS EM LOTE)
 # ============================================================
 else:
