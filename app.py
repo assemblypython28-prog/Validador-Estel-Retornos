@@ -18,6 +18,18 @@ from PIL import Image
 from supabase import create_client, Client
 
 # ============================================================
+# COMPATIBILIDADE: safe_rerun() vs safe_rerun()
+# ============================================================
+def safe_rerun():
+    """Executa o rerun compatível com a versão do Streamlit instalada."""
+    if hasattr(st, 'rerun'):
+        safe_rerun()
+    elif hasattr(st, 'experimental_rerun'):
+        safe_rerun()
+    else:
+        st.markdown('<meta http-equiv="refresh" content="0">', unsafe_allow_html=True)
+
+# ============================================================
 # CONFIGURACAO VISUAL E ESTILO (DESIGN MODERNO)
 # ============================================================
 st.set_page_config(
@@ -80,61 +92,177 @@ def get_deepface():
 def processar_biometria(imagem_st):
     """
     Captura a foto, detecta o rosto e extrai o vetor matematico (embedding).
-    Tenta multiplos backends: mtcnn (melhor) -> retinaface -> opencv (fallback).
+    VERSAO AGRESSIVA: mais backends, pre-processamento, threshold mais baixo.
     """
     temp_path = "temp_face_input.jpg"
+    temp_path_proc = "temp_face_processed.jpg"
+    temp_path_proc2 = "temp_face_processed2.jpg"
+    temp_path_proc3 = "temp_face_processed3.jpg"
+    temp_path_proc4 = "temp_face_processed4.jpg"
+    temp_path_proc5 = "temp_face_processed5.jpg"
+    temp_path_proc6 = "temp_face_processed6.jpg"
+
     try:
+        # === PRE-PROCESSAMENTO DA IMAGEM (multiplas variacoes) ===
         img = Image.open(imagem_st)
-        img.convert("RGB").save(temp_path)
-        
+        img_rgb = img.convert("RGB")
+        img_rgb.save(temp_path)
+
+        # Variacao 1: Contraste alto
+        try:
+            from PIL import ImageEnhance
+            enhancer = ImageEnhance.Contrast(img_rgb)
+            img_contrast = enhancer.enhance(1.5)
+            img_contrast.save(temp_path_proc)
+        except Exception:
+            img_rgb.save(temp_path_proc)
+
+        # Variacao 2: Brilho alto
+        try:
+            enhancer = ImageEnhance.Brightness(img_rgb)
+            img_bright = enhancer.enhance(1.3)
+            img_bright.save(temp_path_proc2)
+        except Exception:
+            img_rgb.save(temp_path_proc2)
+
+        # Variacao 3: Nitidez alta
+        try:
+            enhancer = ImageEnhance.Sharpness(img_rgb)
+            img_sharp = enhancer.enhance(1.5)
+            img_sharp.save(temp_path_proc3)
+        except Exception:
+            img_rgb.save(temp_path_proc3)
+
+        # Variacao 4: Tudo junto
+        try:
+            enhancer = ImageEnhance.Contrast(img_rgb)
+            img_tudo = enhancer.enhance(1.3)
+            enhancer = ImageEnhance.Brightness(img_tudo)
+            img_tudo = enhancer.enhance(1.2)
+            enhancer = ImageEnhance.Sharpness(img_tudo)
+            img_tudo = enhancer.enhance(1.3)
+            img_tudo.save(temp_path_proc4)
+        except Exception:
+            img_rgb.save(temp_path_proc4)
+
+        # Variacao 5: Contraste baixo (para iluminacao forte)
+        try:
+            enhancer = ImageEnhance.Contrast(img_rgb)
+            img_low = enhancer.enhance(0.8)
+            img_low.save(temp_path_proc5)
+        except Exception:
+            img_rgb.save(temp_path_proc5)
+
+        # Variacao 6: Brilho baixo (para iluminacao excessiva)
+        try:
+            enhancer = ImageEnhance.Brightness(img_rgb)
+            img_dark = enhancer.enhance(0.9)
+            img_dark.save(temp_path_proc6)
+        except Exception:
+            img_rgb.save(temp_path_proc6)
+
         df = get_deepface()
-        
-        # Tenta backends na ordem de precisao
-        backends = ["mtcnn", "retinaface", "opencv"]
+
+        # === BACKENDS NA ORDEM DE PRECISAO (EXPANDIDO) ===
+        # retinaface: melhor precisao, mas mais lento
+        # mtcnn: bom equilibrio
+        # opencv: rapido, funciona bem com boa iluminacao
+        # ssd: alternativo robusto
+
+        imagens_teste = [temp_path_proc4, temp_path_proc, temp_path_proc3, temp_path, temp_path_proc2, temp_path_proc5, temp_path_proc6]
+        backends = ["retinaface", "mtcnn", "opencv", "ssd"]
         embeddings_data = None
         ultimo_erro = ""
-        
-        for backend in backends:
-            try:
-                embeddings_data = df.represent(
-                    img_path=temp_path,
-                    model_name="Facenet",
-                    enforce_detection=True,
-                    detector_backend=backend,
-                    align=True
-                )
-                if embeddings_data and len(embeddings_data) > 0:
-                    break
-            except Exception as e:
-                ultimo_erro = str(e)
-                continue
-        
+        metodo_sucesso = ""
+
+        for img_teste in imagens_teste:
+            for backend in backends:
+                try:
+                    embeddings_data = df.represent(
+                        img_path=img_teste,
+                        model_name="Facenet",
+                        enforce_detection=True,
+                        detector_backend=backend,
+                        align=True,
+                        normalization="base"
+                    )
+                    if embeddings_data and len(embeddings_data) > 0:
+                        metodo_sucesso = f"{backend} + pre-processamento"
+                        break
+                except Exception as e:
+                    ultimo_erro = str(e)
+                    continue
+
+            if embeddings_data:
+                break
+
         # Fallback: tenta sem enforce_detection
         if not embeddings_data:
-            try:
-                embeddings_data = df.represent(
-                    img_path=temp_path,
-                    model_name="Facenet",
-                    enforce_detection=False,
-                    detector_backend="opencv",
-                    align=True
-                )
-                st.info("⚠️ Rosto detectado com baixa confianca.")
-            except Exception as e:
-                ultimo_erro = str(e)
-        
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-            
+            for img_teste in imagens_teste:
+                try:
+                    embeddings_data = df.represent(
+                        img_path=img_teste,
+                        model_name="Facenet",
+                        enforce_detection=False,
+                        detector_backend="opencv",
+                        align=True,
+                        normalization="base"
+                    )
+                    if embeddings_data and len(embeddings_data) > 0:
+                        metodo_sucesso = "opencv (sem enforce)"
+                        st.info("⚠️ Rosto detectado com baixa confianca.")
+                        break
+                except Exception as e:
+                    ultimo_erro = str(e)
+
+        # Fallback final: modelo OpenFace
+        if not embeddings_data:
+            for img_teste in imagens_teste:
+                try:
+                    embeddings_data = df.represent(
+                        img_path=img_teste,
+                        model_name="OpenFace",
+                        enforce_detection=False,
+                        detector_backend="opencv",
+                        align=True
+                    )
+                    if embeddings_data and len(embeddings_data) > 0:
+                        metodo_sucesso = "OpenFace (fallback final)"
+                        st.info("⚠️ Deteccao com modelo alternativo.")
+                        break
+                except Exception as e:
+                    ultimo_erro = str(e)
+
+        # Limpeza de arquivos temporarios
+        for f in [temp_path, temp_path_proc, temp_path_proc2, temp_path_proc3, temp_path_proc4, temp_path_proc5, temp_path_proc6]:
+            if os.path.exists(f):
+                os.remove(f)
+
         if embeddings_data and len(embeddings_data) > 0:
+            if metodo_sucesso:
+                st.success(f"✅ Rosto detectado: {metodo_sucesso}")
             return embeddings_data[0]["embedding"]
-        
-        st.error(f"Detalhes: {ultimo_erro[:100]}")
+
+        st.error("❌ Nao foi possivel detectar o rosto.")
+        st.info("""
+        **Dicas para melhorar a deteccao:**
+        1. 🌟 **Iluminacao**: Esteja em local bem iluminado (luz natural eh ideal)
+        2. 🎯 **Centralizacao**: Enquadre o rosto no centro da camera
+        3. 😐 **Expressao**: Mantenha expressao neutra (sem sorriso exagerado)
+        4. 👓 **Oculos**: Se possivel, retire oculos escuros ou de grau grosso
+        5. 🧢 **Acessorios**: Remova bones, lencos ou qualquer coisa que cubra o rosto
+        6. 📏 **Distancia**: Fique a 30-50cm da camera
+        7. 📸 **Qualidade**: Use upload de foto em vez da camera se possivel
+        """)
+
+        if ultimo_erro:
+            st.caption(f"Detalhes tecnicos: {ultimo_erro[:150]}")
         return None
-        
+
     except Exception as e:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
+        for f in [temp_path, temp_path_proc, temp_path_proc2, temp_path_proc3, temp_path_proc4, temp_path_proc5, temp_path_proc6]:
+            if os.path.exists(f):
+                os.remove(f)
         st.error(f"Erro: {str(e)[:100]}")
         return None
 
@@ -205,6 +333,7 @@ def consolidar_registros(registros):
             registros_consolidados.append(reg_base)
 
     return registros_consolidados
+
 
 def extrair_linhas_danfe(pdf_file):
     registros = []
@@ -305,7 +434,21 @@ if not st.session_state.autenticado:
     c_esq, c_centro, c_dir = st.columns([1, 1.4, 1])
     
     with c_centro:
-        foto_captura = st.camera_input("Scanner Facial Ativo:", key="scan_facial_posto_unico")
+        # === CAMERA OU UPLOAD DE FOTO ===
+        tab_cam, tab_upload = st.tabs(["📷 Câmera", "📁 Upload de Foto"])
+
+        foto_captura = None
+
+        with tab_cam:
+            st.info("💡 Dicas: Boa iluminação frontal, rosto centralizado, sem óculos escuros")
+            foto_captura = st.camera_input("Scanner Facial Ativo:", key="scan_facial_posto_unico")
+
+        with tab_upload:
+            st.info("💡 Fotos da galeria geralmente têm melhor qualidade que a câmera do celular")
+            foto_upload = st.file_uploader("Selecione uma foto do rosto:", type=["jpg", "jpeg", "png"], key="upload_foto_login")
+            if foto_upload:
+                foto_captura = foto_upload
+                st.image(foto_upload, caption="Foto selecionada", width=200)
         
         if foto_captura:
             with st.spinner("Buscando sua biometria na base corporativa..."):
@@ -332,21 +475,22 @@ if not st.session_state.autenticado:
                                 vetor_salvo = json.loads(usuario["face_embedding"])
                                 score = calcular_similaridade(vetor_atual, vetor_salvo)
                                 
-                                if score > 0.85:
+                                if score > 0.70:
                                     reconhecido = True
                                     operador_nome = usuario["nome"]
                                     break
                             except Exception:
                                 pass
                         
-                        if reconhecido:
-                            st.success(f"✅ Reconhecido! Seja bem-vindo, {operador_nome}.")
+                        st.success(f"✅ Reconhecido! Seja bem-vindo, {operador_nome}.")
+                        st.info(f"📊 Score de confiança: {score:.1%}")
                             st.session_state.autenticado = True
                             st.session_state.usuario_nome = operador_nome
                             time.sleep(1)
-                            st.rerun()
+                            safe_rerun()
                         else:
                             st.warning("👤 Rosto não localizado na base. Preencha os dados abaixo para vincular sua biometria:")
+                        st.caption(f"📊 Melhor score encontrado: {score:.1%} (mínimo: 70%)")
                             st.session_state.temp_face_vector = vetor_atual
                             
                             with st.expander("📝 Criar Novo Cadastro com esta Biometria", expanded=True):
@@ -370,7 +514,7 @@ if not st.session_state.autenticado:
                                             st.session_state.usuario_nome = nome_cad
                                             st.session_state.temp_face_vector = None
                                             time.sleep(1)
-                                            st.rerun()
+                                            safe_rerun()
                                         except Exception as e:
                                             st.error(f"Erro ao salvar: {e}")
                                     else:
@@ -383,7 +527,7 @@ if not st.session_state.autenticado:
                             if u_t == "admin" and s_t == "admin":
                                 st.session_state.autenticado = True
                                 st.session_state.usuario_nome = "Supervisor Local"
-                                st.rerun()
+                                safe_rerun()
                 else:
                     st.error("⚠️ Não foi possível detectar o rosto claramente. Ajuste a iluminação e centralize-se na câmera.")
 
@@ -399,7 +543,7 @@ else:
         st.session_state.autenticado = False
         st.session_state.dados_conferencia = pd.DataFrame()
         st.session_state.fotos_postadas = {}
-        st.rerun()
+        safe_rerun()
         
     st.markdown("---")
     
@@ -453,7 +597,7 @@ else:
                             if divergencias:
                                 st.warning(f"⚠️ {len(divergencias)} item(s) com quantidades divergentes entre arquivos foram SOMADOS automaticamente.")
 
-                        st.rerun()
+                        safe_rerun()
         
         if not st.session_state.dados_conferencia.empty:
             st.markdown("---")
@@ -472,7 +616,7 @@ else:
             if st.button("Limpar Tudo"):
                 st.session_state.dados_conferencia = pd.DataFrame()
                 st.session_state.fotos_postadas = {}
-                st.rerun()
+                safe_rerun()
 
     if st.session_state.dados_conferencia.empty:
         st.info("💡 **Dica operacional:** Carregue uma ou várias notas fiscais no menu à esquerda para iniciar o processo.")
@@ -485,27 +629,113 @@ else:
         
         with aba_triagem:
             df_ref = st.session_state.dados_conferencia
-            opcoes_seletor = [
+
+            # ============================================================
+            # BUSCA INTELIGENTE COM AUTOCOMPLETE
+            # ============================================================
+            st.markdown("""
+            <style>
+            .busca-destaque { background-color: #E0F2FE; padding: 12px; border-radius: 8px; border-left: 4px solid #0284C7; margin-bottom: 12px; }
+            </style>
+            """, unsafe_allow_html=True)
+
+            st.markdown("<div class='busca-destaque'><b>🔍 Busca Inteligente de Insumos</b><br><small>Digite parte do nome, código ou descrição do produto</small></div>", unsafe_allow_html=True)
+
+            # Campo de busca com autocomplete
+            termo_busca = st.text_input(
+                "Buscar produto (mínimo 2 caracteres):",
+                placeholder="Ex: cimento, parafuso, tubo pvc...",
+                key="busca_produto"
+            ).strip().upper()
+
+            # Montar lista de opções com base nos arquivos importados
+            opcoes_completas = [
                 f"[{row['Arquivo Origem']}] - {row['Descrição do Produto']}"
                 for _, row in df_ref.iterrows()
             ]
-            item_composto_selecionado = st.selectbox(
-                "Selecione o insumo para conferência:",
-                opcoes_seletor
-            )
-            
+
+            # Se digitou algo, filtrar com busca parcial (contém em qualquer parte)
+            if len(termo_busca) >= 2:
+                termos_busca = termo_busca.split()  # Suporta múltiplas palavras
+                opcoes_filtradas = []
+
+                for opcao in opcoes_completas:
+                    # Verifica se TODOS os termos digitados estão presentes na opção
+                    if all(termo in opcao.upper() for termo in termos_busca):
+                        opcoes_filtradas.append(opcao)
+
+                if opcoes_filtradas:
+                    st.success(f"✅ {len(opcoes_filtradas)} item(s) encontrado(s) para '{termo_busca}'")
+
+                    # Se só encontrou 1, pré-seleciona automaticamente
+                    if len(opcoes_filtradas) == 1:
+                        st.info("🎯 Apenas 1 resultado encontrado — pré-selecionado automaticamente!")
+                        item_composto_selecionado = opcoes_filtradas[0]
+                        st.write(f"**Selecionado:** `{item_composto_selecionado}`")
+                    else:
+                        # Mostra os resultados filtrados em um selectbox
+                        item_composto_selecionado = st.selectbox(
+                            "Selecione entre os resultados encontrados:",
+                            opcoes_filtradas,
+                            key="select_filtrado"
+                        )
+                else:
+                    st.warning(f"⚠️ Nenhum resultado para '{termo_busca}'. Mostrando TODOS os itens:")
+                    item_composto_selecionado = st.selectbox(
+                        "Selecione o insumo para conferência (lista completa):",
+                        opcoes_completas,
+                        key="select_completo_fallback"
+                    )
+            else:
+                # Se não digitou nada, mostra todos com um selectbox padrão
+                # Mas agrupa por arquivo de origem para facilitar
+                st.caption("💡 Digite no campo acima para filtrar, ou selecione da lista completa:")
+
+                # Agrupar por arquivo de origem
+                arquivos_unicos = df_ref['Arquivo Origem'].unique()
+                if len(arquivos_unicos) > 1:
+                    arquivo_selecionado = st.selectbox(
+                        "Filtrar por Arquivo/NF:",
+                        ["Todos"] + list(arquivos_unicos),
+                        key="filtro_arquivo"
+                    )
+
+                    if arquivo_selecionado != "Todos":
+                        df_filtrado_arquivo = df_ref[df_ref['Arquivo Origem'] == arquivo_selecionado]
+                        opcoes_filtradas_arq = [
+                            f"[{row['Arquivo Origem']}] - {row['Descrição do Produto']}"
+                            for _, row in df_filtrado_arquivo.iterrows()
+                        ]
+                        item_composto_selecionado = st.selectbox(
+                            "Selecione o insumo:",
+                            opcoes_filtradas_arq,
+                            key="select_por_arquivo"
+                        )
+                    else:
+                        item_composto_selecionado = st.selectbox(
+                            "Selecione o insumo para conferência:",
+                            opcoes_completas,
+                            key="select_completo"
+                        )
+                else:
+                    item_composto_selecionado = st.selectbox(
+                        "Selecione o insumo para conferência:",
+                        opcoes_completas,
+                        key="select_completo_unico"
+                    )
+
             if item_composto_selecionado:
                 arq_nome = item_composto_selecionado.split("] - ")[0].replace("[", "")
                 prod_nome = item_composto_selecionado.split("] - ")[1]
-                
+
                 mask = (df_ref["Arquivo Origem"] == arq_nome) & (df_ref["Descrição do Produto"] == prod_nome)
                 if not mask.any():
                     st.error("Item não encontrado na base.")
                     st.stop()
-                    
+
                 idx = df_ref[mask].index[0]
                 linha = df_ref.loc[idx]
-                
+
                 st.markdown(f"""
                 <div class='card-conferencia'>
                     <p style='color:#64748B; margin:0;'>Arquivo de Origem: <b>{linha['Arquivo Origem']}</b></p>
@@ -513,7 +743,7 @@ else:
                     <p style='margin:5px 0 0 0;'>Qtd NF Prevista: <b>{linha['Quantidade NF']}</b> | Situação Operacional: <b>{linha['Situação']}</b></p>
                 </div>
                 """, unsafe_allow_html=True)
-                
+
                 col_cam, col_form = st.columns(2)
                 with col_cam:
                     foto_mat = st.camera_input(
@@ -524,14 +754,14 @@ else:
                         st.session_state.fotos_postadas[idx] = foto_mat.getvalue()
                         st.session_state.dados_conferencia.at[idx, "Foto Capturada"] = "Sim"
                         st.toast("📸 Imagem do material armazenada na sessão!")
-                        
+
                     if idx in st.session_state.fotos_postadas:
                         st.image(
                             st.session_state.fotos_postadas[idx],
                             caption="Foto salva atualmente para auditoria",
                             width=300
                         )
-                
+
                 with col_form:
                     qtd_conf = st.number_input(
                         "Quantidade real descarregada:",
@@ -544,14 +774,14 @@ else:
                         value=linha['Observações'],
                         key=f"obs_{idx}"
                     )
-                    
+
                     if st.button("Confirmar e Gravar Item", type="primary", key=f"conf_{idx}"):
                         st.session_state.dados_conferencia.at[idx, "Quantidade Conferida"] = qtd_conf
                         st.session_state.dados_conferencia.at[idx, "Observações"] = obs
-                        
+
                         situacao_final = "Conforme" if qtd_conf == linha['Quantidade NF'] else "Divergente"
                         st.session_state.dados_conferencia.at[idx, "Situação"] = situacao_final
-                        
+
                         if supabase and SUPABASE_AVAILABLE:
                             try:
                                 supabase.table("conferencia_itens").insert({
@@ -566,7 +796,7 @@ else:
                                 st.toast("💾 Dados gravados no Supabase com sucesso!")
                             except Exception as e:
                                 st.error(f"Erro ao sincronizar com banco: {e}")
-                        st.rerun()
+                        safe_rerun()
 
         with aba_tabela:
             st.dataframe(st.session_state.dados_conferencia, use_container_width=True)
