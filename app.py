@@ -23,9 +23,9 @@ from supabase import create_client, Client
 def safe_rerun():
     """Executa o rerun compatível com a versão do Streamlit instalada."""
     if hasattr(st, 'rerun'):
-        safe_rerun()
+        st.rerun()
     elif hasattr(st, 'experimental_rerun'):
-        safe_rerun()
+        st.experimental_rerun()
     else:
         st.markdown('<meta http-equiv="refresh" content="0">', unsafe_allow_html=True)
 
@@ -52,18 +52,44 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # ============================================================
-# CONEXAO COM BANCO DE DADOS (SUPABASE)
+# CONEXAO COM BANCO DE DADOS (SUPABASE) - COM TRATAMENTO ROBUSTO
 # ============================================================
 SUPABASE_AVAILABLE = False
 supabase = None
+supabase_error_msg = ""
 
-try:
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
-    supabase = create_client(url, key)
-    SUPABASE_AVAILABLE = True
-except Exception as e:
-    st.sidebar.warning(f"⚠️ Supabase indisponível: {str(e)[:50]}")
+def init_supabase():
+    """Inicializa conexão com Supabase com tratamento completo de erros."""
+    global SUPABASE_AVAILABLE, supabase, supabase_error_msg
+    
+    try:
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_KEY"]
+        
+        if not url or not key:
+            supabase_error_msg = "SUPABASE_URL ou SUPABASE_KEY vazios nos secrets"
+            return
+            
+        supabase = create_client(url, key)
+        
+        # Teste de conectividade: tenta fazer uma query simples
+        try:
+            test = supabase.table("usuarios").select("id", count="exact").limit(1).execute()
+            SUPABASE_AVAILABLE = True
+        except Exception as e:
+            # Tabela pode não existir, mas conexão funcionou
+            if "does not exist" in str(e).lower() or "relation" in str(e).lower():
+                SUPABASE_AVAILABLE = True
+                supabase_error_msg = "Tabela 'usuarios' não encontrada. Crie a tabela no Supabase."
+            else:
+                supabase_error_msg = f"Erro de conexão: {str(e)[:80]}"
+                
+    except Exception as e:
+        supabase_error_msg = f"Falha ao inicializar: {str(e)[:80]}"
+        SUPABASE_AVAILABLE = False
+
+# Inicializa Supabase
+init_supabase()
 
 # Inicializacao robusta do Session State
 if "autenticado" not in st.session_state: 
@@ -461,80 +487,93 @@ if not st.session_state.autenticado:
                                 .select("*")\
                                 .not_("face_embedding", "is", "null")\
                                 .execute()
-                        except Exception:
-                            todos_usuarios = supabase.table("usuarios").select("*").execute()
+                        except Exception as e:
+                            st.error(f"❌ Erro ao consultar usuários no Supabase: {str(e)[:100]}")
+                            st.info("💡 **Soluções:**\n1. Verifique se a tabela 'usuarios' existe no Supabase\n2. Confirme se as credenciais estão corretas nos secrets\n3. Use o login de contingência abaixo")
+                            todos_usuarios = None
 
-                        reconhecido = False
-                        operador_nome = ""
-                        melhor_score = 0.0
+                        if todos_usuarios and hasattr(todos_usuarios, 'data'):
+                            reconhecido = False
+                            operador_nome = ""
+                            melhor_score = 0.0
 
-                        for usuario in todos_usuarios.data:
-                            if not usuario.get("face_embedding"):
-                                continue
+                            for usuario in todos_usuarios.data:
+                                if not usuario.get("face_embedding"):
+                                    continue
 
-                            try:
-                                vetor_salvo = json.loads(usuario["face_embedding"])
-                                score = calcular_similaridade(vetor_atual, vetor_salvo)
+                                try:
+                                    vetor_salvo = json.loads(usuario["face_embedding"])
+                                    score = calcular_similaridade(vetor_atual, vetor_salvo)
 
-                                if score > melhor_score:
-                                    melhor_score = score
+                                    if score > melhor_score:
+                                        melhor_score = score
 
-                                if score > 0.70:
-                                    reconhecido = True
-                                    operador_nome = usuario["nome"]
-                                    break
-                            except Exception:
-                                pass
+                                    if score > 0.70:
+                                        reconhecido = True
+                                        operador_nome = usuario["nome"]
+                                        break
+                                except Exception:
+                                    pass
 
-                        if reconhecido:
-                            st.success(f"✅ Reconhecido! Seja bem-vindo, {operador_nome}.")
-                            st.info(f"📊 Score de confiança: {melhor_score:.1%}")
-                            st.session_state.autenticado = True
-                            st.session_state.usuario_nome = operador_nome
-                            time.sleep(1)
-                            safe_rerun()
-                        else:
-                            st.warning("👤 Rosto não localizado na base. Preencha os dados abaixo para vincular sua biometria:")
-                            st.caption(f"📊 Melhor score encontrado: {melhor_score:.1%} (mínimo: 70%)")
-                            st.session_state.temp_face_vector = vetor_atual
+                            if reconhecido:
+                                st.success(f"✅ Reconhecido! Seja bem-vindo, {operador_nome}.")
+                                st.info(f"📊 Score de confiança: {melhor_score:.1%}")
+                                st.session_state.autenticado = True
+                                st.session_state.usuario_nome = operador_nome
+                                time.sleep(1)
+                                safe_rerun()
+                            else:
+                                st.warning("👤 Rosto não localizado na base. Preencha os dados abaixo para vincular sua biometria:")
+                                st.caption(f"📊 Melhor score encontrado: {melhor_score:.1%} (mínimo: 70%)")
+                                st.session_state.temp_face_vector = vetor_atual
 
-                            with st.expander("📝 Criar Novo Cadastro com esta Biometria", expanded=True):
-                                nome_cad = st.text_input("Nome Completo:")
-                                user_cad = st.text_input("ID Usuário Logístico (Login):")
-                                senha_cad = st.text_input("Defina uma Senha:", type="password")
+                                with st.expander("📝 Criar Novo Cadastro com esta Biometria", expanded=True):
+                                    nome_cad = st.text_input("Nome Completo:")
+                                    user_cad = st.text_input("ID Usuário Logístico (Login):")
+                                    senha_cad = st.text_input("Defina uma Senha:", type="password")
 
-                                if st.button("Salvar Registro e Entrar", type="primary"):
-                                    if nome_cad and user_cad and senha_cad:
-                                        try:
-                                            vetor_json = json.dumps(st.session_state.temp_face_vector)
-                                            supabase.table("usuarios").insert({
-                                                "nome": nome_cad,
-                                                "usuario": user_cad,
-                                                "senha": senha_cad,
-                                                "face_embedding": vetor_json
-                                            }).execute()
+                                    if st.button("Salvar Registro e Entrar", type="primary"):
+                                        if nome_cad and user_cad and senha_cad:
+                                            try:
+                                                vetor_json = json.dumps(st.session_state.temp_face_vector)
+                                                supabase.table("usuarios").insert({
+                                                    "nome": nome_cad,
+                                                    "usuario": user_cad,
+                                                    "senha": senha_cad,
+                                                    "face_embedding": vetor_json
+                                                }).execute()
 
-                                            st.success("🎉 Cadastro Concluído com Biometria!")
-                                            st.session_state.autenticado = True
-                                            st.session_state.usuario_nome = nome_cad
-                                            st.session_state.temp_face_vector = None
-                                            time.sleep(1)
-                                            safe_rerun()
-                                        except Exception as e:
-                                            st.error(f"Erro ao salvar: {e}")
-                                    else:
-                                        st.error("Por favor, preencha todos os campos do formulário.")
+                                                st.success("🎉 Cadastro Concluído com Biometria!")
+                                                st.session_state.autenticado = True
+                                                st.session_state.usuario_nome = nome_cad
+                                                st.session_state.temp_face_vector = None
+                                                time.sleep(1)
+                                                safe_rerun()
+                                            except Exception as e:
+                                                st.error(f"Erro ao salvar: {e}")
+                                        else:
+                                            st.error("Por favor, preencha todos os campos do formulário.")
                     else:
-                        st.info("Supabase Indisponível. Use admin/admin para contingência local.")
-                        u_t = st.text_input("User:")
-                        s_t = st.text_input("Pass:", type="password")
-                        if st.button("Entrar"):
+                        # SUPABASE INDISPONÍVEL - MODO CONTINGÊNCIA
+                        st.warning("⚠️ Supabase Indisponível")
+                        if supabase_error_msg:
+                            st.caption(f"Erro: {supabase_error_msg}")
+                        
+                        st.markdown("---")
+                        st.subheader("🔐 Login de Contingência")
+                        u_t = st.text_input("User:", key="user_contingencia")
+                        s_t = st.text_input("Pass:", type="password", key="pass_contingencia")
+                        if st.button("Entrar", key="btn_contingencia"):
                             if u_t == "admin" and s_t == "admin":
                                 st.session_state.autenticado = True
                                 st.session_state.usuario_nome = "Supervisor Local"
                                 safe_rerun()
+                            else:
+                                st.error("Credenciais inválidas. Use admin/admin")
                 else:
-                    st.error("⚠️ Não foi possível detectar o rosto claramente. Ajuste a iluminação e centralize-se na câmera.")# ============================================================
+                    st.error("⚠️ Não foi possível detectar o rosto claramente. Ajuste a iluminação e centralize-se na câmera.")
+
+# ============================================================
 # PAINEL PRINCIPAL (MULTIPLOS ARQUIVOS EM LOTE)
 # ============================================================
 else:
@@ -810,3 +849,4 @@ else:
             c1.metric("Total de Insumos Carregados", len(df))
             c2.metric("Itens Validados Sem Erro", len(df[df["Situação"] == "Conforme"]))
             c3.metric("Itens Com Divergência", len(df[df["Situação"] == "Divergente"]))
+     
