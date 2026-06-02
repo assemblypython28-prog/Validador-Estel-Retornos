@@ -65,6 +65,8 @@ div[data-testid="stMetricValue"] { font-size: 26px; font-weight: 700; color: #1E
 .login-box { background: white; border: 1px solid #E2E8F0; padding: 24px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-top: 16px; }
 .divider { display: flex; align-items: center; margin: 20px 0; color: #64748B; font-size: 13px; }
 .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: #E2E8F0; margin: 0 12px; }
+
+.cadastro-box { background: linear-gradient(135deg, #F0FDF4 0%, #DCFCE7 100%); border: 1px solid #86EFAC; padding: 20px; border-radius: 12px; margin-top: 16px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -116,6 +118,8 @@ if "busca_termo" not in st.session_state:
     st.session_state.busca_termo = ""
 if "item_selecionado_idx" not in st.session_state:
     st.session_state.item_selecionado_idx = None
+if "mostrar_cadastro" not in st.session_state:
+    st.session_state.mostrar_cadastro = False
 
 # ============================================================
 # ENGENHARIA DE IA FACIAL (DEEPFACE)
@@ -538,48 +542,96 @@ def render_dashboard(df):
             st.caption("Nenhum item conferido ainda.")
 
 # ============================================================
-# FUNCAO: Login com usuario/senha no Supabase
+# FUNCOES DE LOGIN E CADASTRO
 # ============================================================
-def login_usuario_senha(supabase_client, usuario, senha):
-    """
-    Busca usuario pelo login e senha no Supabase.
-    Retorna (sucesso, nome, id) ou (False, None, None)
-    """
+def buscar_usuario_por_credenciais(supabase_client, usuario, senha):
+    """Busca usuario por login e senha. Retorna dict ou None."""
     try:
-        result = supabase_client.table("usuarios")\
-            .select("*")\
-            .eq("usuario", usuario)\
-            .eq("senha", senha)\
-            .execute()
-
+        result = supabase_client.table("usuarios").select("*").eq("usuario", usuario).execute()
         if result.data and len(result.data) > 0:
             user = result.data[0]
-            return True, user.get("nome", usuario), user.get("id")
-        return False, None, None
+            # Verifica senha (comparacao simples)
+            if user.get("senha") == senha:
+                return user
+        return None
     except Exception as e:
-        st.error(f"Erro no login: {str(e)[:100]}")
-        return False, None, None
+        st.error(f"Erro ao consultar usuário: {str(e)[:100]}")
+        return None
+
+def buscar_usuario_por_biometria(supabase_client, vetor_atual):
+    """Busca usuario por biometria facial. Retorna (user_dict, score) ou (None, 0)."""
+    try:
+        result = supabase_client.table("usuarios").select("*").execute()
+        if not result.data:
+            return None, 0.0
+
+        melhor_score = 0.0
+        melhor_usuario = None
+
+        for usuario in result.data:
+            face_emb = usuario.get("face_embedding")
+            if not face_emb:
+                continue
+            try:
+                if isinstance(face_emb, str):
+                    vetor_salvo = json.loads(face_emb)
+                else:
+                    vetor_salvo = face_emb
+
+                score = calcular_similaridade(vetor_atual, vetor_salvo)
+                if score > melhor_score:
+                    melhor_score = score
+                    melhor_usuario = usuario
+            except Exception:
+                continue
+
+        return melhor_usuario, melhor_score
+    except Exception as e:
+        st.error(f"Erro na busca biométrica: {str(e)[:100]}")
+        return None, 0.0
+
+def inserir_usuario_robusto(supabase_client, dados):
+    """Tenta inserir usuario, removendo colunas opcionais se necessario."""
+    dados_insert = dados.copy()
+    colunas_opcionais = ["email", "cargo", "ativo", "created_at"]
+
+    for _ in range(10):
+        try:
+            result = supabase_client.table("usuarios").insert(dados_insert).execute()
+            return True, result
+        except Exception as e:
+            erro = str(e)
+            if "PGRST204" in erro or "Could not find" in erro:
+                match = re.search(r"'([^']+)' column", erro)
+                if match:
+                    col = match.group(1)
+                    if col in dados_insert and col not in ["nome", "usuario", "senha", "face_embedding"]:
+                        dados_insert.pop(col)
+                        continue
+            return False, erro
+    return False, "Max tentativas"
 
 # ============================================================
-# PAINEL DE AUTENTICACAO (BIOMETRIA + LOGIN/SENHA)
+# PAINEL DE AUTENTICACAO (LOGIN + CADASTRO)
 # ============================================================
 if not st.session_state.autenticado:
     st.markdown("""
         <div style='text-align: center; margin-top: 30px; margin-bottom: 20px;'>
             <h1 style='color:#0284C7; font-size: 32px;'>📸 Identificação Biométrica Estel</h1>
-            <p style='color:#64748B; font-size: 16px;'>Tire uma foto para logar instantaneamente ou use seu login e senha.</p>
+            <p style='color:#64748B; font-size: 16px;'>Escolha uma forma de acesso ao sistema.</p>
         </div>
     """, unsafe_allow_html=True)
 
     if not SUPABASE_AVAILABLE:
         st.warning(f"⚠️ Supabase indisponível: {supabase_error_msg}")
-        st.info("💡 O sistema funcionará em modo local.")
+        st.info("💡 O sistema funcionará em modo local com login de contingência.")
 
     c_esq, c_centro, c_dir = st.columns([1, 1.4, 1])
 
     with c_centro:
+
         # ============================================================
-        # SEÇÃO 1: RECONHECIMENTO FACIAL
+        # ABA 1: LOGIN POR BIOMETRIA
         # ============================================================
         st.markdown("""
         <div style="background: #F0F9FF; padding: 12px; border-radius: 8px; margin-bottom: 12px; border-left: 4px solid #0284C7;">
@@ -608,61 +660,28 @@ if not st.session_state.autenticado:
 
                 if vetor_atual is not None:
                     if supabase and SUPABASE_AVAILABLE:
-                        try:
-                            todos_usuarios = supabase.table("usuarios").select("*").execute()
-                        except Exception as e:
-                            st.error(f"❌ Erro ao consultar usuários: {str(e)[:100]}")
-                            todos_usuarios = None
+                        usuario_encontrado, score = buscar_usuario_por_biometria(supabase, vetor_atual)
 
-                        if todos_usuarios and hasattr(todos_usuarios, 'data'):
-                            reconhecido = False
-                            operador_nome = ""
-                            melhor_score = 0.0
-                            usuario_id = None
-
-                            for usuario in todos_usuarios.data:
-                                face_emb = usuario.get("face_embedding")
-                                if not face_emb:
-                                    continue
-
-                                try:
-                                    if isinstance(face_emb, str):
-                                        vetor_salvo = json.loads(face_emb)
-                                    else:
-                                        vetor_salvo = face_emb
-
-                                    score = calcular_similaridade(vetor_atual, vetor_salvo)
-                                    if score > melhor_score:
-                                        melhor_score = score
-                                    if score > 0.70:
-                                        reconhecido = True
-                                        operador_nome = usuario["nome"]
-                                        usuario_id = usuario.get("id")
-                                        break
-                                except Exception:
-                                    pass
-
-                            if reconhecido:
-                                st.success(f"✅ Bem-vindo, {operador_nome}!")
-                                st.info(f"📊 Score de confiança: {melhor_score:.1%}")
-                                st.session_state.autenticado = True
-                                st.session_state.usuario_nome = operador_nome
-                                st.session_state.usuario_id = usuario_id
-                                time.sleep(1)
-                                safe_rerun()
-                            else:
-                                st.warning("👤 Rosto não reconhecido na base.")
-                                st.caption(f"📊 Melhor score: {melhor_score:.1%} (mínimo: 70%)")
-                                st.info("💡 Use a **Opção 2** abaixo para logar com usuário e senha.")
+                        if usuario_encontrado and score > 0.70:
+                            st.success(f"✅ Bem-vindo, {usuario_encontrado['nome']}!")
+                            st.info(f"📊 Score de confiança: {score:.1%}")
+                            st.session_state.autenticado = True
+                            st.session_state.usuario_nome = usuario_encontrado["nome"]
+                            st.session_state.usuario_id = usuario_encontrado.get("id")
+                            time.sleep(1)
+                            safe_rerun()
                         else:
-                            st.error("❌ Não foi possível consultar a base de usuários.")
-                            st.info("💡 Use a **Opção 2** abaixo para logar com usuário e senha.")
+                            st.warning("👤 Rosto não reconhecido na base.")
+                            if score > 0:
+                                st.caption(f"📊 Melhor score: {score:.1%} (mínimo: 70%)")
+                            st.info("💡 Use a **Opção 2** (Login com Senha) ou **Opção 3** (Cadastrar-se).")
+                            st.session_state.temp_face_vector = vetor_atual
                     else:
                         st.warning("⚠️ Supabase indisponível. Biometria desativada.")
-                        st.info("💡 Use a **Opção 2** abaixo para logar com usuário e senha.")
+                        st.info("💡 Use a **Opção 2** (Login com Senha) ou modo offline.")
                 else:
                     st.error("⚠️ Não foi possível detectar o rosto.")
-                    st.info("💡 Use a **Opção 2** abaixo para logar com usuário e senha.")
+                    st.info("💡 Use a **Opção 2** (Login com Senha).")
 
         # ============================================================
         # DIVISOR
@@ -670,12 +689,12 @@ if not st.session_state.autenticado:
         st.markdown('<div class="divider">OU</div>', unsafe_allow_html=True)
 
         # ============================================================
-        # SEÇÃO 2: LOGIN COM USUARIO E SENHA
+        # ABA 2: LOGIN COM USUARIO E SENHA
         # ============================================================
         st.markdown("""
         <div style="background: #F0FDF4; padding: 12px; border-radius: 8px; margin-bottom: 12px; border-left: 4px solid #22C55E;">
             <b>🔑 Opção 2: Login com Usuário e Senha</b><br>
-            <small>Digite suas credenciais cadastradas no sistema</small>
+            <small>Digite suas credenciais cadastradas</small>
         </div>
         """, unsafe_allow_html=True)
 
@@ -691,19 +710,19 @@ if not st.session_state.autenticado:
                 if st.button("🔓 Entrar", type="primary", use_container_width=True):
                     if login_user and login_pass:
                         if supabase and SUPABASE_AVAILABLE:
-                            sucesso, nome, uid = login_usuario_senha(supabase, login_user, login_pass)
-                            if sucesso:
-                                st.success(f"✅ Bem-vindo, {nome}!")
+                            user = buscar_usuario_por_credenciais(supabase, login_user, login_pass)
+                            if user:
+                                st.success(f"✅ Bem-vindo, {user['nome']}!")
                                 st.session_state.autenticado = True
-                                st.session_state.usuario_nome = nome
-                                st.session_state.usuario_id = uid
+                                st.session_state.usuario_nome = user["nome"]
+                                st.session_state.usuario_id = user.get("id")
                                 time.sleep(1)
                                 safe_rerun()
                             else:
                                 st.error("❌ Usuário ou senha incorretos.")
-                                st.info("💡 Se esqueceu a senha, contate o administrador do sistema.")
+                                st.info("💡 Se não tem cadastro, use a **Opção 3** abaixo.")
                         else:
-                            # Modo offline - login de contingência
+                            # Modo offline
                             if login_user == "admin" and login_pass == "admin":
                                 st.success("✅ Login de contingência realizado!")
                                 st.session_state.autenticado = True
@@ -711,20 +730,117 @@ if not st.session_state.autenticado:
                                 time.sleep(1)
                                 safe_rerun()
                             else:
-                                st.error("❌ Modo offline ativo. Use admin/admin para contingência.")
+                                st.error("❌ Modo offline. Use admin/admin ou cadastre-se no Supabase.")
                     else:
                         st.warning("⚠️ Preencha usuário e senha.")
 
             with col_btn2:
                 if st.button("🆘 Esqueci a Senha", use_container_width=True):
-                    st.info("📧 Entre em contato com o administrador do sistema para redefinir sua senha.")
+                    st.info("📧 Entre em contato com o administrador para redefinir sua senha.")
 
         # ============================================================
-        # MODO OFFLINE / CONTINGÊNCIA
+        # DIVISOR 2
         # ============================================================
+        st.markdown('<div class="divider">OU</div>', unsafe_allow_html=True)
+
+        # ============================================================
+        # ABA 3: CADASTRAR-SE
+        # ============================================================
+        st.markdown("""
+        <div style="background: #FEF3C7; padding: 12px; border-radius: 8px; margin-bottom: 12px; border-left: 4px solid #F59E0B;">
+            <b>📝 Opção 3: Cadastrar-se no Sistema</b><br>
+            <small>Crie sua conta com biometria ou apenas com login/senha</small>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Toggle para mostrar/ocultar cadastro
+        if st.button("📋 Quero me Cadastrar", use_container_width=True):
+            st.session_state.mostrar_cadastro = not st.session_state.mostrar_cadastro
+            safe_rerun()
+
+        if st.session_state.mostrar_cadastro:
+            with st.container():
+                st.markdown('<div class="cadastro-box">', unsafe_allow_html=True)
+
+                st.subheader("📝 Novo Cadastro")
+
+                col_c1, col_c2 = st.columns(2)
+                with col_c1:
+                    cad_nome = st.text_input("Nome Completo:", placeholder="Ex: João Silva", key="cad_nome")
+                    cad_user = st.text_input("Usuário (login):", placeholder="Ex: joao.silva", key="cad_user")
+                with col_c2:
+                    cad_email = st.text_input("E-mail:", placeholder="joao@email.com", key="cad_email")
+                    cad_senha = st.text_input("Senha:", type="password", placeholder="Mínimo 4 caracteres", key="cad_senha")
+
+                cad_cargo = st.selectbox("Cargo:", ["Operador", "Supervisor", "Administrador"], key="cad_cargo")
+
+                # Opcao de biometria
+                st.markdown("---")
+                usar_biometria = st.checkbox("✅ Incluir biometria facial no cadastro (recomendado)", value=True, key="usar_bio")
+
+                vetor_cadastro = None
+                if usar_biometria:
+                    st.info("📸 Tire uma foto do seu rosto para vincular à conta")
+                    foto_cad = st.camera_input("Foto para cadastro:", key="cam_cadastro")
+                    if foto_cad:
+                        with st.spinner("Processando biometria..."):
+                            vetor_cadastro = processar_biometria(foto_cad)
+                            if vetor_cadastro:
+                                st.success("✅ Biometria capturada com sucesso!")
+                            else:
+                                st.warning("⚠️ Não foi possível capturar a biometria. Você pode cadastrar sem ela.")
+
+                if st.button("💾 Salvar Cadastro", type="primary", use_container_width=True):
+                    if cad_nome and cad_user and cad_senha:
+                        if len(cad_senha) < 4:
+                            st.error("❌ A senha deve ter pelo menos 4 caracteres.")
+                        else:
+                            if supabase and SUPABASE_AVAILABLE:
+                                # Verifica se usuario ja existe
+                                try:
+                                    check = supabase.table("usuarios").select("usuario").eq("usuario", cad_user).execute()
+                                    if check.data and len(check.data) > 0:
+                                        st.error(f"❌ O usuário '{cad_user}' já existe. Escolha outro.")
+                                    else:
+                                        # Prepara dados
+                                        dados_insert = {
+                                            "nome": cad_nome,
+                                            "usuario": cad_user,
+                                            "senha": cad_senha
+                                        }
+                                        if cad_email:
+                                            dados_insert["email"] = cad_email
+                                        if cad_cargo:
+                                            dados_insert["cargo"] = cad_cargo
+                                        if vetor_cadastro:
+                                            dados_insert["face_embedding"] = json.dumps(vetor_cadastro)
+
+                                        # Tenta inserir
+                                        sucesso, resultado = inserir_usuario_robusto(supabase, dados_insert)
+
+                                        if sucesso:
+                                            st.success("🎉 Cadastro realizado com sucesso!")
+                                            st.info("✅ Agora você pode fazer login com seu usuário e senha.")
+                                            st.session_state.mostrar_cadastro = False
+                                            time.sleep(2)
+                                            safe_rerun()
+                                        else:
+                                            st.error(f"❌ Erro ao cadastrar: {resultado}")
+                                            st.info("💡 Tente novamente ou use o modo offline (admin/admin).")
+                                except Exception as e:
+                                    st.error(f"❌ Erro: {e}")
+                            else:
+                                st.error("❌ Supabase indisponível. Não é possível cadastrar no momento.")
+                                st.info("💡 Use o login de contingência: admin / admin")
+                    else:
+                        st.error("❌ Preencha Nome, Usuário e Senha.")
+
+                st.markdown('</div>', unsafe_allow_html=True)
+
+        # Modo offline info
         if not SUPABASE_AVAILABLE:
             st.markdown("---")
-            st.caption("🟡 Sistema em modo offline. Dados não serão sincronizados com o banco.")
+            st.caption("🟡 Sistema em modo offline. Login de contingência: **admin / admin**")
 
 # ============================================================
 # PAINEL PRINCIPAL
@@ -739,6 +855,7 @@ else:
         st.session_state.dados_conferencia = pd.DataFrame()
         st.session_state.fotos_postadas = {}
         st.session_state.item_selecionado_idx = None
+        st.session_state.mostrar_cadastro = False
         safe_rerun()
 
     st.markdown("---")
