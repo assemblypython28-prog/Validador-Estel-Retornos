@@ -61,6 +61,10 @@ div[data-testid="stMetricValue"] { font-size: 26px; font-weight: 700; color: #1E
 .status-pendente { background: #FEF3C7; color: #92400E; }
 .status-conforme { background: #DCFCE7; color: #166534; }
 .status-divergente { background: #FEE2E2; color: #991B1B; }
+
+.login-box { background: white; border: 1px solid #E2E8F0; padding: 24px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-top: 16px; }
+.divider { display: flex; align-items: center; margin: 20px 0; color: #64748B; font-size: 13px; }
+.divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: #E2E8F0; margin: 0 12px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -534,71 +538,56 @@ def render_dashboard(df):
             st.caption("Nenhum item conferido ainda.")
 
 # ============================================================
-# FUNCAO AUXILIAR: Inserir usuario com fallback de colunas
+# FUNCAO: Login com usuario/senha no Supabase
 # ============================================================
-def inserir_usuario_supabase(supabase_client, dados_completos):
+def login_usuario_senha(supabase_client, usuario, senha):
     """
-    Tenta inserir o usuário com todas as colunas.
-    Se falhar por coluna inexistente (PGRST204), remove a coluna problemática e tenta novamente.
-    Repete até conseguir ou esgotar as colunas opcionais.
+    Busca usuario pelo login e senha no Supabase.
+    Retorna (sucesso, nome, id) ou (False, None, None)
     """
-    # Colunas obrigatórias (sempre devem existir)
-    colunas_obrigatorias = ["nome", "usuario", "senha", "face_embedding"]
+    try:
+        result = supabase_client.table("usuarios")\
+            .select("*")\
+            .eq("usuario", usuario)\
+            .eq("senha", senha)\
+            .execute()
 
-    # Colunas opcionais (podem não existir na tabela antiga)
-    colunas_opcionais = ["email", "cargo", "ativo", "created_at"]
-
-    dados = dados_completos.copy()
-
-    # Primeira tentativa: com todos os dados
-    tentativas = 0
-    max_tentativas = 10
-
-    while tentativas < max_tentativas:
-        try:
-            result = supabase_client.table("usuarios").insert(dados).execute()
-            return result, None
-        except Exception as e:
-            erro_str = str(e)
-            tentativas += 1
-
-            # Verifica se é erro de coluna não encontrada
-            if "PGRST204" in erro_str or "Could not find" in erro_str:
-                # Extrai o nome da coluna do erro
-                match = re.search(r"'([^']+)' column", erro_str)
-                if match:
-                    coluna_problematica = match.group(1)
-                    if coluna_problematica in dados and coluna_problematica not in colunas_obrigatorias:
-                        st.warning(f"⚠️ Coluna '{coluna_problematica}' não existe na tabela. Removendo do insert...")
-                        dados.pop(coluna_problematica)
-                        continue
-                    else:
-                        return None, f"Coluna obrigatória '{coluna_problematica}' não encontrada: {erro_str}"
-                else:
-                    return None, f"Erro de schema não identificado: {erro_str}"
-            else:
-                return None, erro_str
-
-    return None, "Número máximo de tentativas excedido"
+        if result.data and len(result.data) > 0:
+            user = result.data[0]
+            return True, user.get("nome", usuario), user.get("id")
+        return False, None, None
+    except Exception as e:
+        st.error(f"Erro no login: {str(e)[:100]}")
+        return False, None, None
 
 # ============================================================
-# PAINEL DE AUTENTICACAO
+# PAINEL DE AUTENTICACAO (BIOMETRIA + LOGIN/SENHA)
 # ============================================================
 if not st.session_state.autenticado:
     st.markdown("""
         <div style='text-align: center; margin-top: 30px; margin-bottom: 20px;'>
             <h1 style='color:#0284C7; font-size: 32px;'>📸 Identificação Biométrica Estel</h1>
-            <p style='color:#64748B; font-size: 16px;'>Tire uma foto para logar instantaneamente ou criar seu perfil.</p>
+            <p style='color:#64748B; font-size: 16px;'>Tire uma foto para logar instantaneamente ou use seu login e senha.</p>
         </div>
     """, unsafe_allow_html=True)
 
     if not SUPABASE_AVAILABLE:
         st.warning(f"⚠️ Supabase indisponível: {supabase_error_msg}")
-        st.info("💡 O sistema funcionará em modo local com login de contingência.")
+        st.info("💡 O sistema funcionará em modo local.")
 
     c_esq, c_centro, c_dir = st.columns([1, 1.4, 1])
 
     with c_centro:
+        # ============================================================
+        # SEÇÃO 1: RECONHECIMENTO FACIAL
+        # ============================================================
+        st.markdown("""
+        <div style="background: #F0F9FF; padding: 12px; border-radius: 8px; margin-bottom: 12px; border-left: 4px solid #0284C7;">
+            <b>🔐 Opção 1: Login por Biometria Facial</b><br>
+            <small>Tire uma foto ou faça upload do seu rosto</small>
+        </div>
+        """, unsafe_allow_html=True)
+
         tab_cam, tab_upload = st.tabs(["📷 Câmera", "📁 Upload de Foto"])
         foto_captura = None
 
@@ -623,7 +612,6 @@ if not st.session_state.autenticado:
                             todos_usuarios = supabase.table("usuarios").select("*").execute()
                         except Exception as e:
                             st.error(f"❌ Erro ao consultar usuários: {str(e)[:100]}")
-                            st.info("💡 Use o login de contingência abaixo")
                             todos_usuarios = None
 
                         if todos_usuarios and hasattr(todos_usuarios, 'data'):
@@ -663,85 +651,80 @@ if not st.session_state.autenticado:
                                 time.sleep(1)
                                 safe_rerun()
                             else:
-                                st.warning("👤 Rosto não localizado na base.")
+                                st.warning("👤 Rosto não reconhecido na base.")
                                 st.caption(f"📊 Melhor score: {melhor_score:.1%} (mínimo: 70%)")
-                                st.session_state.temp_face_vector = vetor_atual
-
-                                # === CADASTRO DE NOVO USUÁRIO ===
-                                with st.expander("📝 Criar Novo Cadastro com esta Biometria", expanded=True):
-                                    st.markdown("""
-                                    <div style="background:#F0F9FF; padding:12px; border-radius:8px; margin-bottom:12px;">
-                                        <b>ℹ️ Novo usuário detectado</b><br>
-                                        Preencha os dados abaixo para vincular sua biometria ao sistema.
-                                    </div>
-                                    """, unsafe_allow_html=True)
-
-                                    col_c1, col_c2 = st.columns(2)
-                                    with col_c1:
-                                        nome_cad = st.text_input("Nome Completo:", placeholder="Ex: João Silva")
-                                        user_cad = st.text_input("ID Usuário (Login):", placeholder="Ex: joao.silva")
-                                    with col_c2:
-                                        email_cad = st.text_input("E-mail:", placeholder="joao@estel.com.br")
-                                        senha_cad = st.text_input("Defina uma Senha:", type="password")
-
-                                    cargo_cad = st.selectbox("Cargo:", ["Operador", "Supervisor", "Administrador"])
-
-                                    if st.button("💾 Salvar Cadastro e Entrar", type="primary"):
-                                        if nome_cad and user_cad and senha_cad:
-                                            try:
-                                                vetor_json = json.dumps(st.session_state.temp_face_vector)
-
-                                                # Dados completos que queremos inserir
-                                                dados_usuario = {
-                                                    "nome": nome_cad,
-                                                    "usuario": user_cad,
-                                                    "email": email_cad,
-                                                    "senha": senha_cad,
-                                                    "cargo": cargo_cad,
-                                                    "face_embedding": vetor_json,
-                                                    "ativo": True
-                                                }
-
-                                                # Usa a função robusta de inserção
-                                                result, erro = inserir_usuario_supabase(supabase, dados_usuario)
-
-                                                if result:
-                                                    st.success("🎉 Cadastro realizado com sucesso!")
-                                                    st.session_state.autenticado = True
-                                                    st.session_state.usuario_nome = nome_cad
-                                                    st.session_state.temp_face_vector = None
-                                                    time.sleep(1)
-                                                    safe_rerun()
-                                                else:
-                                                    st.error(f"❌ Erro ao salvar: {erro}")
-                                                    st.info("💡 Tente usar o login de contingência (admin/admin)")
-                                            except Exception as e:
-                                                st.error(f"Erro inesperado: {e}")
-                                        else:
-                                            st.error("Preencha Nome, Usuário e Senha.")
+                                st.info("💡 Use a **Opção 2** abaixo para logar com usuário e senha.")
+                        else:
+                            st.error("❌ Não foi possível consultar a base de usuários.")
+                            st.info("💡 Use a **Opção 2** abaixo para logar com usuário e senha.")
                     else:
-                        # MODO CONTINGÊNCIA
-                        st.warning("⚠️ Modo Offline - Login de Contingência")
-                        if supabase_error_msg:
-                            st.caption(f"Erro: {supabase_error_msg}")
+                        st.warning("⚠️ Supabase indisponível. Biometria desativada.")
+                        st.info("💡 Use a **Opção 2** abaixo para logar com usuário e senha.")
+                else:
+                    st.error("⚠️ Não foi possível detectar o rosto.")
+                    st.info("💡 Use a **Opção 2** abaixo para logar com usuário e senha.")
 
-                        st.markdown("---")
-                        st.subheader("🔐 Acesso de Emergência")
-                        col_u, col_s = st.columns(2)
-                        with col_u:
-                            u_t = st.text_input("Usuário:", value="admin", key="user_contingencia")
-                        with col_s:
-                            s_t = st.text_input("Senha:", type="password", value="admin", key="pass_contingencia")
+        # ============================================================
+        # DIVISOR
+        # ============================================================
+        st.markdown('<div class="divider">OU</div>', unsafe_allow_html=True)
 
-                        if st.button("Entrar", key="btn_contingencia", type="primary"):
-                            if u_t == "admin" and s_t == "admin":
+        # ============================================================
+        # SEÇÃO 2: LOGIN COM USUARIO E SENHA
+        # ============================================================
+        st.markdown("""
+        <div style="background: #F0FDF4; padding: 12px; border-radius: 8px; margin-bottom: 12px; border-left: 4px solid #22C55E;">
+            <b>🔑 Opção 2: Login com Usuário e Senha</b><br>
+            <small>Digite suas credenciais cadastradas no sistema</small>
+        </div>
+        """, unsafe_allow_html=True)
+
+        with st.container():
+            col_u, col_s = st.columns(2)
+            with col_u:
+                login_user = st.text_input("👤 Usuário:", placeholder="Digite seu login", key="login_user")
+            with col_s:
+                login_pass = st.text_input("🔒 Senha:", type="password", placeholder="Digite sua senha", key="login_pass")
+
+            col_btn1, col_btn2 = st.columns([1, 1])
+            with col_btn1:
+                if st.button("🔓 Entrar", type="primary", use_container_width=True):
+                    if login_user and login_pass:
+                        if supabase and SUPABASE_AVAILABLE:
+                            sucesso, nome, uid = login_usuario_senha(supabase, login_user, login_pass)
+                            if sucesso:
+                                st.success(f"✅ Bem-vindo, {nome}!")
                                 st.session_state.autenticado = True
-                                st.session_state.usuario_nome = "Supervisor Local"
+                                st.session_state.usuario_nome = nome
+                                st.session_state.usuario_id = uid
+                                time.sleep(1)
                                 safe_rerun()
                             else:
-                                st.error("❌ Credenciais inválidas. Use admin/admin")
-                else:
-                    st.error("⚠️ Não foi possível detectar o rosto. Ajuste a iluminação e tente novamente.")
+                                st.error("❌ Usuário ou senha incorretos.")
+                                st.info("💡 Se esqueceu a senha, contate o administrador do sistema.")
+                        else:
+                            # Modo offline - login de contingência
+                            if login_user == "admin" and login_pass == "admin":
+                                st.success("✅ Login de contingência realizado!")
+                                st.session_state.autenticado = True
+                                st.session_state.usuario_nome = "Supervisor Local"
+                                time.sleep(1)
+                                safe_rerun()
+                            else:
+                                st.error("❌ Modo offline ativo. Use admin/admin para contingência.")
+                    else:
+                        st.warning("⚠️ Preencha usuário e senha.")
+
+            with col_btn2:
+                if st.button("🆘 Esqueci a Senha", use_container_width=True):
+                    st.info("📧 Entre em contato com o administrador do sistema para redefinir sua senha.")
+
+        # ============================================================
+        # MODO OFFLINE / CONTINGÊNCIA
+        # ============================================================
+        if not SUPABASE_AVAILABLE:
+            st.markdown("---")
+            st.caption("🟡 Sistema em modo offline. Dados não serão sincronizados com o banco.")
 
 # ============================================================
 # PAINEL PRINCIPAL
