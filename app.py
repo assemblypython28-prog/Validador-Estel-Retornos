@@ -306,14 +306,80 @@ def buscar_itens_inteligente(df, termo_busca):
     return df.loc[indices_ordenados].copy(), indices_ordenados
 
 # ============================================================
-# EXTRACAO DE DADOS
+# EXTRACAO DE DADOS - CORRIGIDO PARA CARREGAR TODOS OS FORMATOS
 # ============================================================
+# Tenta importar PyMuPDF (fitz) primeiro, depois pdfminer como fallback
 FITZ_AVAILABLE = False
+PYPDF_AVAILABLE = False
+PDFMINER_AVAILABLE = False
+
 try:
     import fitz
     FITZ_AVAILABLE = True
 except ImportError:
+    try:
+        import pymupdf as fitz
+        FITZ_AVAILABLE = True
+    except ImportError:
+        pass
+
+try:
+    from pypdf import PdfReader
+    PYPDF_AVAILABLE = True
+except ImportError:
+    try:
+        from PyPDF2 import PdfReader
+        PYPDF_AVAILABLE = True
+    except ImportError:
+        pass
+
+try:
+    from pdfminer.high_level import extract_text
+    PDFMINER_AVAILABLE = True
+except ImportError:
     pass
+
+def extrair_texto_pdf(pdf_bytes):
+    """Extrai texto de PDF usando múltiplas bibliotecas em ordem de prioridade."""
+    texto = ""
+
+    # 1. Tenta PyMuPDF (fitz) - mais rápido e confiável
+    if FITZ_AVAILABLE:
+        try:
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            for pagina in doc:
+                texto += pagina.get_text()
+            doc.close()
+            if texto.strip():
+                return texto
+        except Exception:
+            texto = ""
+
+    # 2. Tenta pypdf/PyPDF2
+    if PYPDF_AVAILABLE:
+        try:
+            from io import BytesIO
+            reader = PdfReader(BytesIO(pdf_bytes))
+            for page in reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    texto += page_text + "\n"
+            if texto.strip():
+                return texto
+        except Exception:
+            texto = ""
+
+    # 3. Tenta pdfminer.six
+    if PDFMINER_AVAILABLE:
+        try:
+            from io import BytesIO
+            texto = extract_text(BytesIO(pdf_bytes))
+            if texto.strip():
+                return texto
+        except Exception:
+            texto = ""
+
+    return texto
 
 def consolidar_registros(registros):
     if not registros:
@@ -347,55 +413,64 @@ def consolidar_registros(registros):
 
 def extrair_linhas_danfe(pdf_file):
     registros = []
-    full_text = ""
     try:
         pdf_bytes = pdf_file.read()
-        if FITZ_AVAILABLE:
-            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-            for pagina in doc:
-                full_text += pagina.get_text()
-            doc.close()
-        else:
-            from pdfminer.high_level import extract_text
-            full_text = extract_text(io.BytesIO(pdf_bytes))
+        pdf_file.seek(0)  # Reseta o ponteiro para possível reuso
+
+        full_text = extrair_texto_pdf(pdf_bytes)
+
         if not full_text:
+            st.warning(f"⚠️ Não foi possível extrair texto do PDF: {pdf_file.name}")
             return []
+
         linhas = full_text.split("\n")
         modo_captura = False
+
         for linha in linhas:
             linha = linha.strip()
             if not linha:
                 continue
-            if re.search(r'C\.D(\.)?\s*PROD|DESCRI\.O\s*DO(\s*S)?\s*PRODUTO', linha, re.IGNORECASE):
+            # Detecta início da tabela de produtos
+            if re.search(r'C\.D(\.)?\s*PROD|DESCRI\.O\s*DO(\s*S)?\s*PRODUTO|CÓDIGO\s*PRODUTO|PRODUTO\s*SERVIÇO', linha, re.IGNORECASE):
                 modo_captura = True
                 continue
-            if re.search(r'C\.LCULO\s*DO\s*ISSQN|DADOS\s*ADICIONAIS|TRANSPORTADOR', linha, re.IGNORECASE):
+            # Detecta fim da tabela
+            if re.search(r'C\.LCULO\s*DO\s*ISSQN|DADOS\s*ADICIONAIS|TRANSPORTADOR|INFORMAÇÕES\s*COMPLEMENTARES', linha, re.IGNORECASE):
                 modo_captura = False
-                break
+                continue
             if modo_captura:
                 numeros = re.findall(r'\b\d+[\d.,]*\b', linha)
+                # Remove números do início (código do produto)
                 desc = re.sub(r'^\d+\s+', '', linha)
+                # Remove números do final (valores monetários/quantidades)
                 desc = re.sub(r'\s*\d+[\d.,]*.*$', '', desc)
-                if len(desc.strip()) > 5 and len(numeros) >= 3 and not desc.strip().isdigit():
+                desc = desc.strip()
+
+                # Validação mais flexível para capturar mais itens
+                if len(desc) > 3 and not desc.isdigit():
                     qtd = 1.0
                     try:
-                        qtd = float(numeros[0].replace('.', '').replace(',', '.'))
+                        if numeros:
+                            # Tenta pegar o primeiro número como quantidade
+                            qtd_str = numeros[0].replace('.', '').replace(',', '.')
+                            qtd = float(qtd_str)
                     except ValueError:
                         pass
                     registros.append({
                         "Arquivo Origem": pdf_file.name,
-                        "Descrição do Produto": desc.strip().upper(),
+                        "Descrição do Produto": desc.upper(),
                         "Quantidade NF": qtd,
                         "Quantidade Conferida": 0.0,
                         "Situação": "Pendente",
                         "Foto Capturada": "Não",
                         "Observações": ""
                     })
-    except Exception:
-        pass
+    except Exception as e:
+        st.error(f"❌ Erro ao processar PDF {pdf_file.name}: {str(e)[:100]}")
     return registros
 
 def extrair_linhas_excel(excel_file):
+    registros = []
     try:
         if excel_file.name.endswith('.csv'):
             df_cru = pd.read_csv(excel_file, encoding='latin1')
@@ -403,11 +478,30 @@ def extrair_linhas_excel(excel_file):
             df_cru = pd.read_excel(excel_file)
         if df_cru.empty:
             return []
-        col_desc = next((c for c in df_cru.columns if "DESCRI" in c.upper()),
-                       df_cru.columns[1] if len(df_cru.columns) > 1 else df_cru.columns[0])
-        col_qtd = next((c for c in df_cru.columns if "QTD" in c.upper() or "QUANT" in c.upper()),
-                      df_cru.columns[0])
-        registros = []
+
+        # Detecta colunas automaticamente
+        colunas = [c.upper() for c in df_cru.columns]
+        col_desc = None
+        col_qtd = None
+
+        # Busca coluna de descrição
+        for i, c in enumerate(colunas):
+            if any(kw in c for kw in ["DESCRI", "PRODUTO", "ITEM", "NOME", "MATERIAL", "INSUMO"]):
+                col_desc = df_cru.columns[i]
+                break
+        if col_desc is None and len(df_cru.columns) > 1:
+            col_desc = df_cru.columns[1]
+        elif col_desc is None:
+            col_desc = df_cru.columns[0]
+
+        # Busca coluna de quantidade
+        for i, c in enumerate(colunas):
+            if any(kw in c for kw in ["QTD", "QUANT", "QTDE", "QUANTIDADE", "VOLUME", "TOTAL"]):
+                col_qtd = df_cru.columns[i]
+                break
+        if col_qtd is None:
+            col_qtd = df_cru.columns[0]
+
         for _, row in df_cru.iterrows():
             desc_val = str(row[col_desc]).strip().upper()
             if len(desc_val) > 2 and not desc_val.isdigit():
@@ -426,9 +520,9 @@ def extrair_linhas_excel(excel_file):
                     "Foto Capturada": "Não",
                     "Observações": ""
                 })
-        return registros
-    except Exception:
-        return []
+    except Exception as e:
+        st.error(f"❌ Erro ao processar Excel/CSV {excel_file.name}: {str(e)[:100]}")
+    return registros
 
 # ============================================================
 # DASHBOARD
@@ -550,7 +644,6 @@ def buscar_usuario_por_credenciais(supabase_client, usuario, senha):
         result = supabase_client.table("usuarios").select("*").eq("usuario", usuario).execute()
         if result.data and len(result.data) > 0:
             user = result.data[0]
-            # Verifica senha (comparacao simples)
             if user.get("senha") == senha:
                 return user
         return None
@@ -722,7 +815,6 @@ if not st.session_state.autenticado:
                                 st.error("❌ Usuário ou senha incorretos.")
                                 st.info("💡 Se não tem cadastro, use a **Opção 3** abaixo.")
                         else:
-                            # Modo offline
                             if login_user == "admin" and login_pass == "admin":
                                 st.success("✅ Login de contingência realizado!")
                                 st.session_state.autenticado = True
@@ -753,7 +845,6 @@ if not st.session_state.autenticado:
         </div>
         """, unsafe_allow_html=True)
 
-        # Toggle para mostrar/ocultar cadastro
         if st.button("📋 Quero me Cadastrar", use_container_width=True):
             st.session_state.mostrar_cadastro = not st.session_state.mostrar_cadastro
             safe_rerun()
@@ -774,7 +865,6 @@ if not st.session_state.autenticado:
 
                 cad_cargo = st.selectbox("Cargo:", ["Operador", "Supervisor", "Administrador"], key="cad_cargo")
 
-                # Opcao de biometria
                 st.markdown("---")
                 usar_biometria = st.checkbox("✅ Incluir biometria facial no cadastro (recomendado)", value=True, key="usar_bio")
 
@@ -796,13 +886,11 @@ if not st.session_state.autenticado:
                             st.error("❌ A senha deve ter pelo menos 4 caracteres.")
                         else:
                             if supabase and SUPABASE_AVAILABLE:
-                                # Verifica se usuario ja existe
                                 try:
                                     check = supabase.table("usuarios").select("usuario").eq("usuario", cad_user).execute()
                                     if check.data and len(check.data) > 0:
                                         st.error(f"❌ O usuário '{cad_user}' já existe. Escolha outro.")
                                     else:
-                                        # Prepara dados
                                         dados_insert = {
                                             "nome": cad_nome,
                                             "usuario": cad_user,
@@ -815,7 +903,6 @@ if not st.session_state.autenticado:
                                         if vetor_cadastro:
                                             dados_insert["face_embedding"] = json.dumps(vetor_cadastro)
 
-                                        # Tenta inserir
                                         sucesso, resultado = inserir_usuario_robusto(supabase, dados_insert)
 
                                         if sucesso:
@@ -837,7 +924,6 @@ if not st.session_state.autenticado:
 
                 st.markdown('</div>', unsafe_allow_html=True)
 
-        # Modo offline info
         if not SUPABASE_AVAILABLE:
             st.markdown("---")
             st.caption("🟡 Sistema em modo offline. Login de contingência: **admin / admin**")
@@ -863,6 +949,20 @@ else:
     # SIDEBAR
     with st.sidebar:
         st.header("📥 Carregar Documentos")
+
+        # Info sobre bibliotecas disponíveis
+        libs_status = []
+        if FITZ_AVAILABLE:
+            libs_status.append("✅ PyMuPDF")
+        if PYPDF_AVAILABLE:
+            libs_status.append("✅ PyPDF")
+        if PDFMINER_AVAILABLE:
+            libs_status.append("✅ PDFMiner")
+        if not libs_status:
+            libs_status.append("⚠️ Nenhuma lib PDF detectada")
+
+        st.caption(" | ".join(libs_status))
+
         arquivos_entrada = st.file_uploader(
             "Arraste DANFEs (PDF) ou planilhas:",
             type=["pdf", "xlsx", "xls", "csv"],
@@ -872,12 +972,28 @@ else:
         if arquivos_entrada:
             if st.button("⚡ Processar Carga em Lote", type="primary"):
                 all_records = []
+                arquivos_processados = 0
+                arquivos_com_erro = []
+
                 with st.spinner("Lendo documentos..."):
                     for arq in arquivos_entrada:
-                        if arq.name.endswith(".pdf"):
-                            all_records.extend(extrair_linhas_danfe(arq))
-                        else:
-                            all_records.extend(extrair_linhas_excel(arq))
+                        try:
+                            if arq.name.lower().endswith(".pdf"):
+                                regs = extrair_linhas_danfe(arq)
+                                if regs:
+                                    all_records.extend(regs)
+                                    arquivos_processados += 1
+                                else:
+                                    arquivos_com_erro.append(f"{arq.name} (sem dados extraídos)")
+                            else:
+                                regs = extrair_linhas_excel(arq)
+                                if regs:
+                                    all_records.extend(regs)
+                                    arquivos_processados += 1
+                                else:
+                                    arquivos_com_erro.append(f"{arq.name} (sem dados extraídos)")
+                        except Exception as e:
+                            arquivos_com_erro.append(f"{arq.name} ({str(e)[:50]})")
 
                     if all_records:
                         with st.spinner("Consolidando dados..."):
@@ -888,32 +1004,80 @@ else:
                             itens_removidos = total_original - total_consolidado
                             st.session_state.dados_conferencia = df_novo
 
+                            st.success(f"📊 {total_consolidado} itens carregados de {arquivos_processados} arquivo(s)!")
                             if itens_removidos > 0:
-                                st.success(f"📊 {total_consolidado} itens consolidados!")
-                                st.info(f"{total_original} brutos → {itens_removidos} tratados → {total_consolidado} únicos")
-                            else:
-                                st.success(f"📊 {total_consolidado} itens mapeados!")
+                                st.info(f"{total_original} brutos → {itens_removidos} consolidados → {total_consolidado} únicos")
+
+                            if arquivos_com_erro:
+                                st.warning(f"⚠️ {len(arquivos_com_erro)} arquivo(s) não retornaram dados:")
+                                for err in arquivos_com_erro[:3]:
+                                    st.caption(f"- {err}")
 
                             divergencias = [r for r in registros_consolidados if "divergentes" in r.get("Observações", "")]
                             if divergencias:
                                 st.warning(f"⚠️ {len(divergencias)} item(s) com quantidades divergentes foram SOMADOS.")
                         safe_rerun()
+                    else:
+                        st.error("❌ Nenhum item foi extraído dos documentos.")
+                        st.info("💡 Verifique se os PDFs são DANFEs ou se as planilhas têm colunas de descrição e quantidade.")
 
+        # ============================================================
+        # EXPORTAÇÃO EM EXCEL - CORRIGIDA E MELHORADA
+        # ============================================================
         if not st.session_state.dados_conferencia.empty:
             st.markdown("---")
-            st.header("📤 Fechamento")
-            memoria_excel = io.BytesIO()
-            with pd.ExcelWriter(memoria_excel, engine='openpyxl') as writer:
-                st.session_state.dados_conferencia.to_excel(writer, index=False, sheet_name="Consolidado")
+            st.header("📤 Exportar Relatório")
 
-            st.download_button(
-                label="💾 Exportar Relatório",
-                data=memoria_excel.getvalue(),
-                file_name=f"Relatorio_Estel_{time.strftime('%Y%m%d_%H%M')}.xlsx",
-                mime="application/vnd.ms-excel"
-            )
+            try:
+                memoria_excel = io.BytesIO()
+                with pd.ExcelWriter(memoria_excel, engine='openpyxl') as writer:
+                    # Aba principal com todos os dados
+                    st.session_state.dados_conferencia.to_excel(
+                        writer, 
+                        index=False, 
+                        sheet_name="Consolidado"
+                    )
 
-            if st.button("🗑️ Limpar Tudo"):
+                    # Aba de resumo
+                    df = st.session_state.dados_conferencia
+                    resumo_data = {
+                        'Métrica': [
+                            'Total de Itens',
+                            'Conformes',
+                            'Divergentes', 
+                            'Pendentes',
+                            'Com Foto',
+                            'Operador',
+                            'Data/Hora'
+                        ],
+                        'Valor': [
+                            len(df),
+                            len(df[df["Situação"] == "Conforme"]),
+                            len(df[df["Situação"] == "Divergente"]),
+                            len(df[df["Situação"] == "Pendente"]),
+                            len(df[df["Foto Capturada"] == "Sim"]),
+                            st.session_state.usuario_nome,
+                            time.strftime("%Y-%m-%d %H:%M:%S")
+                        ]
+                    }
+                    pd.DataFrame(resumo_data).to_excel(
+                        writer,
+                        index=False,
+                        sheet_name="Resumo"
+                    )
+
+                st.download_button(
+                    label="💾 Exportar Excel (.xlsx)",
+                    data=memoria_excel.getvalue(),
+                    file_name=f"Relatorio_Estel_{time.strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            except Exception as e:
+                st.error(f"❌ Erro ao gerar Excel: {str(e)[:100]}")
+                st.info("💡 Tente instalar: pip install openpyxl")
+
+            if st.button("🗑️ Limpar Tudo", use_container_width=True):
                 st.session_state.dados_conferencia = pd.DataFrame()
                 st.session_state.fotos_postadas = {}
                 st.session_state.item_selecionado_idx = None
