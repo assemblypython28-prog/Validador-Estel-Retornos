@@ -48,13 +48,10 @@ div[data-testid="stMetricValue"] { font-size: 26px; font-weight: 700; color: #1E
 .card-conferencia { background: white; border: 1px solid #E2E8F0; padding: 20px; border-radius: 12px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
 [data-testid="stSidebar"] { background-color: white; border-right: 1px solid #E2E8F0; }
 
-/* BUSCA INTELIGENTE */
 .busca-container { background: linear-gradient(135deg, #E0F2FE 0%, #F0F9FF 100%); padding: 16px; border-radius: 12px; border-left: 4px solid #0284C7; margin-bottom: 16px; }
 .busca-resultado { background: #F0FDF4; padding: 12px; border-radius: 8px; border-left: 4px solid #22C55E; margin: 8px 0; }
-.busca-alerta { background: #FEF3C7; padding: 12px; border-radius: 8px; border-left: 4px solid #F59E0B; margin: 8px 0; }
 .busca-vazio { background: #FEF2F2; padding: 12px; border-radius: 8px; border-left: 4px solid #EF4444; margin: 8px 0; }
 
-/* DASHBOARD */
 .dashboard-card { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); border: 1px solid #E2E8F0; }
 .dashboard-metric { font-size: 32px; font-weight: 700; color: #0284C7; }
 .dashboard-label { font-size: 13px; color: #64748B; text-transform: uppercase; letter-spacing: 0.5px; }
@@ -84,7 +81,6 @@ def init_supabase():
             return
         supabase = create_client(url, key)
         try:
-            # Teste de conectividade com query simples
             test = supabase.table("usuarios").select("id").limit(1).execute()
             SUPABASE_AVAILABLE = True
         except Exception as e:
@@ -112,8 +108,6 @@ if "temp_face_vector" not in st.session_state:
     st.session_state.temp_face_vector = None
 if "fotos_postadas" not in st.session_state:
     st.session_state.fotos_postadas = {}
-if "aba_ativa" not in st.session_state:
-    st.session_state.aba_ativa = "triagem"
 if "busca_termo" not in st.session_state:
     st.session_state.busca_termo = ""
 if "item_selecionado_idx" not in st.session_state:
@@ -577,11 +571,7 @@ if not st.session_state.autenticado:
 
                 if vetor_atual is not None:
                     if supabase and SUPABASE_AVAILABLE:
-                        # ============================================================
-                        # CORREÇÃO: Query sem .not_() problemático
-                        # ============================================================
                         try:
-                            # Método correto: filtrar no Python após buscar todos
                             todos_usuarios = supabase.table("usuarios").select("*").execute()
                         except Exception as e:
                             st.error(f"❌ Erro ao consultar usuários: {str(e)[:100]}")
@@ -595,13 +585,11 @@ if not st.session_state.autenticado:
                             usuario_id = None
 
                             for usuario in todos_usuarios.data:
-                                # Filtra usuários sem face_embedding no Python
                                 face_emb = usuario.get("face_embedding")
                                 if not face_emb:
                                     continue
 
                                 try:
-                                    # Suporta tanto JSONB (dict/list) quanto TEXT (string JSON)
                                     if isinstance(face_emb, str):
                                         vetor_salvo = json.loads(face_emb)
                                     else:
@@ -654,15 +642,29 @@ if not st.session_state.autenticado:
                                         if nome_cad and user_cad and senha_cad:
                                             try:
                                                 vetor_json = json.dumps(st.session_state.temp_face_vector)
-                                                result = supabase.table("usuarios").insert({
+
+                                                # ============================================================
+                                                # CORREÇÃO: Insere apenas colunas que existem na tabela
+                                                # ============================================================
+                                                dados_usuario = {
                                                     "nome": nome_cad,
                                                     "usuario": user_cad,
                                                     "email": email_cad,
                                                     "senha": senha_cad,
                                                     "cargo": cargo_cad,
-                                                    "face_embedding": vetor_json,
-                                                    "ativo": True
-                                                }).execute()
+                                                    "face_embedding": vetor_json
+                                                }
+
+                                                # Tenta inserir com 'ativo' - se falhar, tenta sem
+                                                try:
+                                                    result = supabase.table("usuarios").insert(dados_usuario).execute()
+                                                except Exception as e1:
+                                                    if "ativo" in str(e1).lower() or "schema cache" in str(e1).lower():
+                                                        # Remove 'ativo' e tenta novamente
+                                                        dados_usuario.pop("ativo", None)
+                                                        result = supabase.table("usuarios").insert(dados_usuario).execute()
+                                                    else:
+                                                        raise e1
 
                                                 st.success("🎉 Cadastro realizado com sucesso!")
                                                 st.session_state.autenticado = True
