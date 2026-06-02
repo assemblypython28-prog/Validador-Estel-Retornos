@@ -65,7 +65,7 @@ div[data-testid="stMetricValue"] { font-size: 26px; font-weight: 700; color: #1E
 """, unsafe_allow_html=True)
 
 # ============================================================
-# CONEXAO COM BANCO DE DADOS (SUPABASE) - COM TRATAMENTO ROBUSTO
+# CONEXAO COM BANCO DE DADOS (SUPABASE)
 # ============================================================
 SUPABASE_AVAILABLE = False
 supabase = None
@@ -86,16 +86,16 @@ def init_supabase():
         except Exception as e:
             if "does not exist" in str(e).lower() or "relation" in str(e).lower():
                 SUPABASE_AVAILABLE = True
-                supabase_error_msg = "Tabela 'usuarios' não encontrada. Crie a tabela no Supabase."
+                supabase_error_msg = "Tabela 'usuarios' não encontrada."
             else:
-                supabase_error_msg = f"Erro de conexão: {str(e)[:80]}"
+                supabase_error_msg = f"Erro: {str(e)[:80]}"
     except Exception as e:
-        supabase_error_msg = f"Falha ao inicializar: {str(e)[:80]}"
+        supabase_error_msg = f"Falha: {str(e)[:80]}"
         SUPABASE_AVAILABLE = False
 
 init_supabase()
 
-# Inicializacao robusta do Session State
+# Session State
 if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
 if "usuario_nome" not in st.session_state:
@@ -220,7 +220,7 @@ def processar_biometria(imagem_st):
 
         st.error("❌ Não foi possível detectar o rosto.")
         st.info("""
-        **Dicas para melhorar a detecção:**
+        **Dicas:**
         1. 🌟 Iluminação frontal e forte
         2. 🎯 Rosto centralizado na câmera
         3. 😐 Expressão neutra
@@ -241,7 +241,7 @@ def calcular_similaridade(vetor1, vetor2):
     return float(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2)))
 
 # ============================================================
-# BUSCA INTELIGENTE E DINÂMICA
+# BUSCA INTELIGENTE
 # ============================================================
 def buscar_itens_inteligente(df, termo_busca):
     if not termo_busca or len(termo_busca.strip()) < 2:
@@ -298,7 +298,7 @@ def buscar_itens_inteligente(df, termo_busca):
     return df.loc[indices_ordenados].copy(), indices_ordenados
 
 # ============================================================
-# ENGINES DE EXTRACAO DE DADOS
+# EXTRACAO DE DADOS
 # ============================================================
 FITZ_AVAILABLE = False
 try:
@@ -423,7 +423,7 @@ def extrair_linhas_excel(excel_file):
         return []
 
 # ============================================================
-# DASHBOARD ATUALIZADO
+# DASHBOARD
 # ============================================================
 def render_dashboard(df):
     if df.empty:
@@ -534,7 +534,55 @@ def render_dashboard(df):
             st.caption("Nenhum item conferido ainda.")
 
 # ============================================================
-# PAINEL DE AUTENTICACAO (LOGIN + CADASTRO)
+# FUNCAO AUXILIAR: Inserir usuario com fallback de colunas
+# ============================================================
+def inserir_usuario_supabase(supabase_client, dados_completos):
+    """
+    Tenta inserir o usuário com todas as colunas.
+    Se falhar por coluna inexistente (PGRST204), remove a coluna problemática e tenta novamente.
+    Repete até conseguir ou esgotar as colunas opcionais.
+    """
+    # Colunas obrigatórias (sempre devem existir)
+    colunas_obrigatorias = ["nome", "usuario", "senha", "face_embedding"]
+
+    # Colunas opcionais (podem não existir na tabela antiga)
+    colunas_opcionais = ["email", "cargo", "ativo", "created_at"]
+
+    dados = dados_completos.copy()
+
+    # Primeira tentativa: com todos os dados
+    tentativas = 0
+    max_tentativas = 10
+
+    while tentativas < max_tentativas:
+        try:
+            result = supabase_client.table("usuarios").insert(dados).execute()
+            return result, None
+        except Exception as e:
+            erro_str = str(e)
+            tentativas += 1
+
+            # Verifica se é erro de coluna não encontrada
+            if "PGRST204" in erro_str or "Could not find" in erro_str:
+                # Extrai o nome da coluna do erro
+                match = re.search(r"'([^']+)' column", erro_str)
+                if match:
+                    coluna_problematica = match.group(1)
+                    if coluna_problematica in dados and coluna_problematica not in colunas_obrigatorias:
+                        st.warning(f"⚠️ Coluna '{coluna_problematica}' não existe na tabela. Removendo do insert...")
+                        dados.pop(coluna_problematica)
+                        continue
+                    else:
+                        return None, f"Coluna obrigatória '{coluna_problematica}' não encontrada: {erro_str}"
+                else:
+                    return None, f"Erro de schema não identificado: {erro_str}"
+            else:
+                return None, erro_str
+
+    return None, "Número máximo de tentativas excedido"
+
+# ============================================================
+# PAINEL DE AUTENTICACAO
 # ============================================================
 if not st.session_state.autenticado:
     st.markdown("""
@@ -643,37 +691,32 @@ if not st.session_state.autenticado:
                                             try:
                                                 vetor_json = json.dumps(st.session_state.temp_face_vector)
 
-                                                # ============================================================
-                                                # CORREÇÃO: Insere apenas colunas que existem na tabela
-                                                # ============================================================
+                                                # Dados completos que queremos inserir
                                                 dados_usuario = {
                                                     "nome": nome_cad,
                                                     "usuario": user_cad,
                                                     "email": email_cad,
                                                     "senha": senha_cad,
                                                     "cargo": cargo_cad,
-                                                    "face_embedding": vetor_json
+                                                    "face_embedding": vetor_json,
+                                                    "ativo": True
                                                 }
 
-                                                # Tenta inserir com 'ativo' - se falhar, tenta sem
-                                                try:
-                                                    result = supabase.table("usuarios").insert(dados_usuario).execute()
-                                                except Exception as e1:
-                                                    if "ativo" in str(e1).lower() or "schema cache" in str(e1).lower():
-                                                        # Remove 'ativo' e tenta novamente
-                                                        dados_usuario.pop("ativo", None)
-                                                        result = supabase.table("usuarios").insert(dados_usuario).execute()
-                                                    else:
-                                                        raise e1
+                                                # Usa a função robusta de inserção
+                                                result, erro = inserir_usuario_supabase(supabase, dados_usuario)
 
-                                                st.success("🎉 Cadastro realizado com sucesso!")
-                                                st.session_state.autenticado = True
-                                                st.session_state.usuario_nome = nome_cad
-                                                st.session_state.temp_face_vector = None
-                                                time.sleep(1)
-                                                safe_rerun()
+                                                if result:
+                                                    st.success("🎉 Cadastro realizado com sucesso!")
+                                                    st.session_state.autenticado = True
+                                                    st.session_state.usuario_nome = nome_cad
+                                                    st.session_state.temp_face_vector = None
+                                                    time.sleep(1)
+                                                    safe_rerun()
+                                                else:
+                                                    st.error(f"❌ Erro ao salvar: {erro}")
+                                                    st.info("💡 Tente usar o login de contingência (admin/admin)")
                                             except Exception as e:
-                                                st.error(f"Erro ao salvar: {e}")
+                                                st.error(f"Erro inesperado: {e}")
                                         else:
                                             st.error("Preencha Nome, Usuário e Senha.")
                     else:
@@ -787,7 +830,7 @@ else:
         ])
 
         # ============================================================
-        # ABA TRIAGEM - BUSCA INTELIGENTE
+        # ABA TRIAGEM
         # ============================================================
         with aba_triagem:
             df_ref = st.session_state.dados_conferencia
@@ -799,7 +842,6 @@ else:
             </div>
             """, unsafe_allow_html=True)
 
-            # Busca em tempo real
             termo_busca = st.text_input(
                 "Buscar produto:",
                 value=st.session_state.get("busca_termo", ""),
@@ -807,16 +849,13 @@ else:
                 key="busca_produto"
             ).strip()
 
-            # Atualiza session state
             if termo_busca != st.session_state.get("busca_termo", ""):
                 st.session_state.busca_termo = termo_busca
                 st.session_state.item_selecionado_idx = None
                 safe_rerun()
 
-            # Executa busca inteligente
             df_resultado, indices_resultado = buscar_itens_inteligente(df_ref, termo_busca)
 
-            # Filtro por arquivo (sempre visível)
             arquivos_unicos = df_ref['Arquivo Origem'].unique()
             if len(arquivos_unicos) > 1:
                 arquivo_filtro = st.selectbox(
@@ -827,7 +866,6 @@ else:
                 if arquivo_filtro != "Todos os arquivos":
                     df_resultado = df_resultado[df_resultado['Arquivo Origem'].str.contains(arquivo_filtro, na=False)]
 
-            # Resultados da busca
             if termo_busca and len(termo_busca) >= 2:
                 if not df_resultado.empty:
                     st.markdown(f"""
@@ -848,7 +886,6 @@ else:
             else:
                 df_resultado = df_ref.copy()
 
-            # Selectbox com resultados
             opcoes_resultado = [
                 f"[{row['Situação']}] [{row['Arquivo Origem'][:25]}] - {row['Descrição do Produto'][:60]}"
                 for _, row in df_resultado.iterrows()
@@ -862,7 +899,6 @@ else:
                     key="select_item"
                 )
 
-                # Pega o índice real do DataFrame original
                 if indices_resultado:
                     idx_real = indices_resultado[idx_selecionado]
                 else:
@@ -872,7 +908,6 @@ else:
 
                 linha = df_ref.loc[idx_real]
 
-                # Badge de status colorido
                 status_class = {
                     "Pendente": "status-pendente",
                     "Conforme": "status-conforme",
@@ -955,7 +990,6 @@ else:
                             st.toast("⚠️ Divergência registrada!")
                             safe_rerun()
 
-                    # Gravar no Supabase
                     if st.button("💾 Gravar no Banco", key=f"save_{idx_real}"):
                         st.session_state.dados_conferencia.at[idx_real, "Quantidade Conferida"] = qtd_conf
                         st.session_state.dados_conferencia.at[idx_real, "Observações"] = obs
@@ -988,7 +1022,6 @@ else:
         with aba_tabela:
             df = st.session_state.dados_conferencia
 
-            # Filtros
             col_f1, col_f2, col_f3 = st.columns(3)
             with col_f1:
                 filtro_status = st.multiselect("Filtrar por Status:", ["Pendente", "Conforme", "Divergente"], default=[])
