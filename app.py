@@ -84,7 +84,8 @@ def init_supabase():
             return
         supabase = create_client(url, key)
         try:
-            test = supabase.table("usuarios").select("id", count="exact").limit(1).execute()
+            # Teste de conectividade com query simples
+            test = supabase.table("usuarios").select("id").limit(1).execute()
             SUPABASE_AVAILABLE = True
         except Exception as e:
             if "does not exist" in str(e).lower() or "relation" in str(e).lower():
@@ -140,11 +141,10 @@ def processar_biometria(imagem_st):
         from PIL import ImageEnhance
         variations = [
             (ImageEnhance.Contrast, 1.5), (ImageEnhance.Brightness, 1.3),
-            (ImageEnhance.Sharpness, 1.5), None,  # combined
+            (ImageEnhance.Sharpness, 1.5), None,
             (ImageEnhance.Contrast, 0.8), (ImageEnhance.Brightness, 0.9)
         ]
 
-        # Combined variation
         try:
             e = ImageEnhance.Contrast(img_rgb)
             img_tudo = e.enhance(1.3)
@@ -250,14 +250,6 @@ def calcular_similaridade(vetor1, vetor2):
 # BUSCA INTELIGENTE E DINÂMICA
 # ============================================================
 def buscar_itens_inteligente(df, termo_busca):
-    """
-    Busca inteligente que:
-    1. Remove acentos e normaliza texto
-    2. Busca em múltiplas colunas (descrição, arquivo, observações)
-    3. Suporta múltiplas palavras (AND lógico)
-    4. Calcula score de relevância
-    5. Ordena por melhor match
-    """
     if not termo_busca or len(termo_busca.strip()) < 2:
         return df.copy(), []
 
@@ -271,40 +263,31 @@ def buscar_itens_inteligente(df, termo_busca):
     scores = []
 
     for idx, row in df.iterrows():
-        # Campos de busca
         descricao = str(row.get("Descrição do Produto", "")).upper()
         arquivo = str(row.get("Arquivo Origem", "")).upper()
         obs = str(row.get("Observações", "")).upper()
         situacao = str(row.get("Situação", "")).upper()
-
-        # Texto combinado para busca
         texto_completo = f"{descricao} {arquivo} {obs} {situacao}"
 
-        # Score de matching
         score = 0
         termos_encontrados = 0
 
         for t in termos:
-            # Match exato na descrição = maior peso
             if t in descricao:
                 score += 10
                 if descricao.startswith(t):
-                    score += 5  # Bônus se começa com o termo
+                    score += 5
                 termos_encontrados += 1
-            # Match no arquivo
             elif t in arquivo:
                 score += 3
                 termos_encontrados += 1
-            # Match em observações
             elif t in obs:
                 score += 2
                 termos_encontrados += 1
-            # Match em qualquer lugar
             elif t in texto_completo:
                 score += 1
                 termos_encontrados += 1
 
-        # Bônus se TODOS os termos foram encontrados
         if termos_encontrados == len(termos):
             score += 5
 
@@ -315,7 +298,6 @@ def buscar_itens_inteligente(df, termo_busca):
     if not resultados:
         return df.copy(), []
 
-    # Ordenar por score (maior primeiro)
     pares = sorted(zip(resultados, scores), key=lambda x: x[1], reverse=True)
     indices_ordenados = [p[0] for p in pares]
 
@@ -466,7 +448,6 @@ def render_dashboard(df):
 
     st.markdown("### 📊 Painel de Controle em Tempo Real")
 
-    # Cards principais
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.markdown(f"""
@@ -511,7 +492,6 @@ def render_dashboard(df):
 
     st.markdown("---")
 
-    # Gráficos e análises
     col_left, col_right = st.columns(2)
 
     with col_left:
@@ -545,7 +525,6 @@ def render_dashboard(df):
         </div>
         """, unsafe_allow_html=True)
 
-        # Últimos itens conferidos
         st.markdown("#### 🔄 Últimas Atualizações")
         df_recente = df[df["Situação"] != "Pendente"].tail(5)
         if not df_recente.empty:
@@ -571,7 +550,6 @@ if not st.session_state.autenticado:
         </div>
     """, unsafe_allow_html=True)
 
-    # Status da conexão
     if not SUPABASE_AVAILABLE:
         st.warning(f"⚠️ Supabase indisponível: {supabase_error_msg}")
         st.info("💡 O sistema funcionará em modo local com login de contingência.")
@@ -599,11 +577,12 @@ if not st.session_state.autenticado:
 
                 if vetor_atual is not None:
                     if supabase and SUPABASE_AVAILABLE:
+                        # ============================================================
+                        # CORREÇÃO: Query sem .not_() problemático
+                        # ============================================================
                         try:
-                            todos_usuarios = supabase.table("usuarios")\
-                                .select("*")\
-                                .not_("face_embedding", "is", "null")\
-                                .execute()
+                            # Método correto: filtrar no Python após buscar todos
+                            todos_usuarios = supabase.table("usuarios").select("*").execute()
                         except Exception as e:
                             st.error(f"❌ Erro ao consultar usuários: {str(e)[:100]}")
                             st.info("💡 Use o login de contingência abaixo")
@@ -616,10 +595,18 @@ if not st.session_state.autenticado:
                             usuario_id = None
 
                             for usuario in todos_usuarios.data:
-                                if not usuario.get("face_embedding"):
+                                # Filtra usuários sem face_embedding no Python
+                                face_emb = usuario.get("face_embedding")
+                                if not face_emb:
                                     continue
+
                                 try:
-                                    vetor_salvo = json.loads(usuario["face_embedding"])
+                                    # Suporta tanto JSONB (dict/list) quanto TEXT (string JSON)
+                                    if isinstance(face_emb, str):
+                                        vetor_salvo = json.loads(face_emb)
+                                    else:
+                                        vetor_salvo = face_emb
+
                                     score = calcular_similaridade(vetor_atual, vetor_salvo)
                                     if score > melhor_score:
                                         melhor_score = score
@@ -1024,4 +1011,3 @@ else:
         # ============================================================
         with aba_dashboard:
             render_dashboard(st.session_state.dados_conferencia)
-     
