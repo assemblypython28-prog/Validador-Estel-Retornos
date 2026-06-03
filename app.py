@@ -523,8 +523,7 @@ def extrair_linhas_danfe(pdf_file):
 def _extrair_danfe_por_texto(full_text, nome_arquivo):
     """Extrai produtos do texto do DANFE usando regex (método fallback)."""
     registros = []
-    linhas = full_text.split("
-")
+    linhas = full_text.split("\n")
     modo_captura = False
 
     for linha in linhas:
@@ -544,7 +543,7 @@ def _extrair_danfe_por_texto(full_text, nome_arquivo):
 
         if modo_captura:
             # Tenta extrair quantidade e descrição da linha
-            numeros = re.findall(r'\d+[\d.,]*', linha)
+            numeros = re.findall(r'\b\d+[\d.,]*\b', linha)
 
             # Remove números do início (código do produto)
             desc = re.sub(r'^\d+\s+', '', linha)
