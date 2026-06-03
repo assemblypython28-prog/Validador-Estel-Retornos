@@ -1,5 +1,6 @@
 import os
 
+
 # ============================================================
 # CONFIGURACAO DO OPENCV E KERAS (ANTES DE TUDO)
 # ============================================================
@@ -417,56 +418,168 @@ def extrair_linhas_danfe(pdf_file):
         pdf_bytes = pdf_file.read()
         pdf_file.seek(0)  # Reseta o ponteiro para possível reuso
 
-        full_text = extrair_texto_pdf(pdf_bytes)
+        if not FITZ_AVAILABLE:
+            st.warning(f"⚠️ PyMuPDF não disponível. Tentando fallback para {pdf_file.name}")
+            full_text = extrair_texto_pdf(pdf_bytes)
+            if not full_text:
+                st.warning(f"⚠️ Não foi possível extrair texto do PDF: {pdf_file.name}")
+                return []
+            return _extrair_danfe_por_texto(full_text, pdf_file.name)
 
-        if not full_text:
-            st.warning(f"⚠️ Não foi possível extrair texto do PDF: {pdf_file.name}")
-            return []
+        # === MÉTODO PRINCIPAL: PyMuPDF com find_tables() ===
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
-        linhas = full_text.split("\n")
-        modo_captura = False
+        for page_num in range(len(doc)):
+            page = doc[page_num]
 
-        for linha in linhas:
-            linha = linha.strip()
-            if not linha:
-                continue
-            # Detecta início da tabela de produtos
-            if re.search(r'C\.D(\.)?\s*PROD|DESCRI\.O\s*DO(\s*S)?\s*PRODUTO|CÓDIGO\s*PRODUTO|PRODUTO\s*SERVIÇO', linha, re.IGNORECASE):
-                modo_captura = True
-                continue
-            # Detecta fim da tabela
-            if re.search(r'C\.LCULO\s*DO\s*ISSQN|DADOS\s*ADICIONAIS|TRANSPORTADOR|INFORMAÇÕES\s*COMPLEMENTARES', linha, re.IGNORECASE):
-                modo_captura = False
-                continue
-            if modo_captura:
-                numeros = re.findall(r'\b\d+[\d.,]*\b', linha)
-                # Remove números do início (código do produto)
-                desc = re.sub(r'^\d+\s+', '', linha)
-                # Remove números do final (valores monetários/quantidades)
-                desc = re.sub(r'\s*\d+[\d.,]*.*$', '', desc)
-                desc = desc.strip()
+            # Tenta encontrar tabelas na página
+            try:
+                tables = page.find_tables()
+                if tables and tables.tables:
+                    for table in tables.tables:
+                        rows = table.extract()
+                        if not rows:
+                            continue
 
-                # Validação mais flexível para capturar mais itens
-                if len(desc) > 3 and not desc.isdigit():
-                    qtd = 1.0
-                    try:
-                        if numeros:
-                            # Tenta pegar o primeiro número como quantidade
-                            qtd_str = numeros[0].replace('.', '').replace(',', '.')
-                            qtd = float(qtd_str)
-                    except ValueError:
-                        pass
-                    registros.append({
-                        "Arquivo Origem": pdf_file.name,
-                        "Descrição do Produto": desc.upper(),
-                        "Quantidade NF": qtd,
-                        "Quantidade Conferida": 0.0,
-                        "Situação": "Pendente",
-                        "Foto Capturada": "Não",
-                        "Observações": ""
-                    })
+                        # Detecta cabeçalho e índices das colunas
+                        header = [str(c).strip().upper() if c else "" for c in rows[0]]
+
+                        idx_desc = None
+                        idx_qtd = None
+
+                        for i, h in enumerate(header):
+                            h_clean = re.sub(r'[^A-ZÇÃÕÁÉÍÓÚÂÊÎÔÛÄËÏÖÜ]', '', h)
+                            if any(k in h_clean for k in ["DESCRI", "PRODUTO", "PRODUTOSERVICO", "PRODUTOSERVIÇO"]):
+                                idx_desc = i
+                            if any(k in h_clean for k in ["QTD", "QUANT", "QTDE", "QUANTIDADE"]):
+                                idx_qtd = i
+
+                        # Se não achou no cabeçalho, tenta inferir pelas linhas
+                        if idx_desc is None and len(header) > 1:
+                            idx_desc = 1  # geralmente a segunda coluna
+                        if idx_qtd is None and len(header) > 2:
+                            idx_qtd = 2  # geralmente a terceira coluna
+
+                        # Processa as linhas de dados (pula cabeçalho)
+                        for row in rows[1:]:
+                            if not row or len(row) < 2:
+                                continue
+
+                            desc = ""
+                            qtd = 1.0
+
+                            # Extrai descrição
+                            if idx_desc is not None and idx_desc < len(row):
+                                desc = str(row[idx_desc]).strip()
+                                # Limpa códigos numéricos no início
+                                desc = re.sub(r'^\d+\s+', '', desc)
+                                desc = re.sub(r'^\d+', '', desc).strip()
+
+                            # Extrai quantidade
+                            if idx_qtd is not None and idx_qtd < len(row):
+                                qtd_str = str(row[idx_qtd]).strip()
+                                qtd_str = qtd_str.replace('.', '').replace(',', '.')
+                                try:
+                                    qtd = float(qtd_str) if qtd_str else 1.0
+                                except:
+                                    qtd = 1.0
+
+                            # Validação: descrição deve ter mais de 3 caracteres e não ser só números
+                            if desc and len(desc) > 3 and not desc.isdigit():
+                                registros.append({
+                                    "Arquivo Origem": pdf_file.name,
+                                    "Descrição do Produto": desc.upper(),
+                                    "Quantidade NF": qtd,
+                                    "Quantidade Conferida": 0.0,
+                                    "Situação": "Pendente",
+                                    "Foto Capturada": "Não",
+                                    "Observações": ""
+                                })
+
+                    continue  # Se achou tabelas, pula para próxima página
+            except Exception:
+                pass
+
+            # === FALLBACK: extração por texto da página ===
+            page_text = page.get_text("text")
+            if page_text.strip():
+                page_regs = _extrair_danfe_por_texto(page_text, pdf_file.name)
+                registros.extend(page_regs)
+
+        doc.close()
+
+        # Se não achou nada com tabelas, tenta texto completo
+        if not registros:
+            full_text = extrair_texto_pdf(pdf_bytes)
+            if full_text.strip():
+                registros = _extrair_danfe_por_texto(full_text, pdf_file.name)
+
     except Exception as e:
         st.error(f"❌ Erro ao processar PDF {pdf_file.name}: {str(e)[:100]}")
+
+    return registros
+
+
+def _extrair_danfe_por_texto(full_text, nome_arquivo):
+    """Extrai produtos do texto do DANFE usando regex (método fallback)."""
+    registros = []
+    linhas = full_text.split("
+")
+    modo_captura = False
+
+    for linha in linhas:
+        linha = linha.strip()
+        if not linha:
+            continue
+
+        # Detecta início da tabela de produtos
+        if re.search(r'C\.D(\.)?\s*PROD|DESCRI\.O\s*DO(\s*S)?\s*PRODUTO|CÓDIGO\s*PRODUTO|PRODUTO\s*SERVIÇO|DESCRIÇÃO\s*DOS\s*PRODUTOS', linha, re.IGNORECASE):
+            modo_captura = True
+            continue
+
+        # Detecta fim da tabela
+        if re.search(r'C\.LCULO\s*DO\s*ISSQN|DADOS\s*ADICIONAIS|TRANSPORTADOR|INFORMAÇÕES\s*COMPLEMENTARES|CÁLCULO\s*DO\s*IMPOSTO', linha, re.IGNORECASE):
+            modo_captura = False
+            continue
+
+        if modo_captura:
+            # Tenta extrair quantidade e descrição da linha
+            numeros = re.findall(r'\d+[\d.,]*', linha)
+
+            # Remove números do início (código do produto)
+            desc = re.sub(r'^\d+\s+', '', linha)
+            # Remove números do final (valores monetários/quantidades)
+            desc = re.sub(r'\s*\d+[\d.,]*.*$', '', desc)
+            desc = desc.strip()
+
+            # Validação mais flexível
+            if len(desc) > 3 and not desc.isdigit():
+                qtd = 1.0
+                try:
+                    if numeros:
+                        # Tenta pegar o primeiro número razoável como quantidade
+                        for num_str in numeros:
+                            num_limpa = num_str.replace('.', '').replace(',', '.')
+                            try:
+                                val = float(num_limpa)
+                                if 0 < val < 100000:  # quantidade deve ser positiva e razoável
+                                    qtd = val
+                                    break
+                            except:
+                                continue
+                except ValueError:
+                    pass
+
+                registros.append({
+                    "Arquivo Origem": nome_arquivo,
+                    "Descrição do Produto": desc.upper(),
+                    "Quantidade NF": qtd,
+                    "Quantidade Conferida": 0.0,
+                    "Situação": "Pendente",
+                    "Foto Capturada": "Não",
+                    "Observações": ""
+                })
+
     return registros
 
 def extrair_linhas_excel(excel_file):
