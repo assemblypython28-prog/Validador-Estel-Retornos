@@ -1,3 +1,76 @@
+
+import os
+
+
+# ============================================================
+# CONFIGURACAO DO OPENCV E KERAS (ANTES DE TUDO)
+# ============================================================
+os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '0'
+os.environ['TF_USE_LEGACY_KERAS'] = '1'
+
+import cv2
+import streamlit as st
+import pandas as pd
+import time
+import io
+import re
+import json
+import numpy as np
+from PIL import Image
+
+# ============================================================
+# COMPATIBILIDADE: safe_rerun()
+# ============================================================
+def safe_rerun():
+    if hasattr(st, 'rerun'):
+        st.rerun()
+    elif hasattr(st, 'experimental_rerun'):
+        st.experimental_rerun()
+    else:
+        st.markdown('<meta http-equiv="refresh" content="0">', unsafe_allow_html=True)
+
+# ============================================================
+# CONFIGURACAO VISUAL E ESTILO
+# ============================================================
+st.set_page_config(
+    page_title="Validador de Retorno de Obra - Estel",
+    page_icon="🚚",
+    layout="wide"
+)
+
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+html, body, [class*="css"] { font-family: "Inter", sans-serif; background-color: #F8FAFC; }
+div[data-testid="stMetricValue"] { font-size: 26px; font-weight: 700; color: #1E293B; }
+.stButton>button { width: 100%; border-radius: 8px; height: 42px; background-color: #0284C7; color: white; font-weight: 600; border: none; }
+.stButton>button:hover { background-color: #0369A1; }
+.stCameraInput>div>button { background-color: #0284C7 !important; color: white !important; }
+.card-conferencia { background: white; border: 1px solid #E2E8F0; padding: 20px; border-radius: 12px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+[data-testid="stSidebar"] { background-color: white; border-right: 1px solid #E2E8F0; }
+
+.busca-container { background: linear-gradient(135deg, #E0F2FE 0%, #F0F9FF 100%); padding: 16px; border-radius: 12px; border-left: 4px solid #0284C7; margin-bottom: 16px; }
+.busca-resultado { background: #F0FDF4; padding: 12px; border-radius: 8px; border-left: 4px solid #22C55E; margin: 8px 0; }
+.busca-vazio { background: #FEF2F2; padding: 12px; border-radius: 8px; border-left: 4px solid #EF4444; margin: 8px 0; }
+
+.dashboard-card { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); border: 1px solid #E2E8F0; }
+.dashboard-metric { font-size: 32px; font-weight: 700; color: #0284C7; }
+.dashboard-label { font-size: 13px; color: #64748B; text-transform: uppercase; letter-spacing: 0.5px; }
+.progress-bar { width: 100%; height: 8px; background: #E2E8F0; border-radius: 4px; overflow: hidden; }
+.progress-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
+.status-badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+.status-pendente { background: #FEF3C7; color: #92400E; }
+.status-conforme { background: #DCFCE7; color: #166534; }
+.status-divergente { background: #FEE2E2; color: #991B1B; }
+
+.login-box { background: white; border: 1px solid #E2E8F0; padding: 24px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-top: 16px; }
+.divider { display: flex; align-items: center; margin: 20px 0; color: #64748B; font-size: 13px; }
+.divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: #E2E8F0; margin: 0 12px; }
+
+.cadastro-box { background: linear-gradient(135deg, #F0FDF4 0%, #DCFCE7 100%); border: 1px solid #86EFAC; padding: 20px; border-radius: 12px; margin-top: 16px; }
+</style>
+""", unsafe_allow_html=True)
+
 import os
 
 # ============================================================
@@ -75,6 +148,23 @@ div[data-testid="stMetricValue"] { font-size: 26px; font-weight: 700; color: #1E
 from sqlalchemy import create_engine, Column, Integer, String, Float, Text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
+# --- PATCH: CockroachDB v25+ compatibilidade com psycopg2 ---
+# O psycopg2 nao reconhece a string de versao do CockroachDB v25+
+# (ex: "CockroachDB CCL v25.4.10"). Forcamos retorno de versao PG compativel.
+try:
+    import psycopg2
+    _original_get_parameter_status = psycopg2.extensions.Connection.get_parameter_status
+
+    def _patched_get_parameter_status(self, parameter):
+        if parameter == 'server_version':
+            return '130000'  # Simula PostgreSQL 13.0.0
+        return _original_get_parameter_status(self, parameter)
+
+    psycopg2.extensions.Connection.get_parameter_status = _patched_get_parameter_status
+except Exception:
+    pass  # Se psycopg2 nao estiver disponivel, o erro aparecera depois
+# --- FIM DO PATCH ---
+
 Base = declarative_base()
 DB_AVAILABLE = False
 db_error_msg = ""
@@ -107,7 +197,12 @@ def init_db():
     global DB_AVAILABLE, db_error_msg, session_db
     try:
         DATABASE_URL = "postgresql+psycopg2://almox:H31u6KWGzHjnu4EWXOCXrQ@kooky-singer-16481.jxf.gcp-us-east1.cockroachlabs.cloud:26257/defaultdb?sslmode=require"
-        engine = create_engine(DATABASE_URL, pool_pre_ping=True, connect_args={"connect_timeout": 10})
+        engine = create_engine(
+            DATABASE_URL,
+            pool_pre_ping=True,
+            connect_args={"connect_timeout": 10, "options": "-c statement_timeout=30000"},
+            execution_options={"postgresql_server_version": (13, 0, 0)}
+        )
         Base.metadata.create_all(engine)
         Session = sessionmaker(bind=engine)
         session_db = Session()
@@ -137,6 +232,8 @@ if "item_selecionado_idx" not in st.session_state:
     st.session_state.item_selecionado_idx = None
 if "mostrar_cadastro" not in st.session_state:
     st.session_state.mostrar_cadastro = False
+
+
 # ============================================================
 # ENGENHARIA DE IA FACIAL (DEEPFACE)
 # ============================================================
@@ -761,6 +858,7 @@ def render_dashboard(df):
                 """, unsafe_allow_html=True)
         else:
             st.caption("Nenhum item conferido ainda.")
+
 # ============================================================
 # FUNCOES DE LOGIN E CADASTRO
 # ============================================================
@@ -853,7 +951,7 @@ if not st.session_state.autenticado:
     """, unsafe_allow_html=True)
 
     if not DB_AVAILABLE:
-        st.warning(f"⚠️ Banco de dados indisponível: {db_error_msg}")
+        st.warning(f"⚠️ Supabase indisponível: {db_error_msg}")
         st.info("💡 O sistema funcionará em modo local com login de contingência.")
 
     c_esq, c_centro, c_dir = st.columns([1, 1.4, 1])
@@ -907,7 +1005,7 @@ if not st.session_state.autenticado:
                             st.info("💡 Use a **Opção 2** (Login com Senha) ou **Opção 3** (Cadastrar-se).")
                             st.session_state.temp_face_vector = vetor_atual
                     else:
-                        st.warning("⚠️ Banco de dados indisponível. Biometria desativada.")
+                        st.warning("⚠️ Supabase indisponível. Biometria desativada.")
                         st.info("💡 Use a **Opção 2** (Login com Senha) ou modo offline.")
                 else:
                     st.error("⚠️ Não foi possível detectar o rosto.")
@@ -959,7 +1057,7 @@ if not st.session_state.autenticado:
                                 time.sleep(1)
                                 safe_rerun()
                             else:
-                                st.error("❌ Modo offline. Use admin/admin ou cadastre-se no banco.")
+                                st.error("❌ Modo offline. Use admin/admin ou cadastre-se no Supabase.")
                     else:
                         st.warning("⚠️ Preencha usuário e senha.")
 
@@ -1024,8 +1122,8 @@ if not st.session_state.autenticado:
                         else:
                             if session_db and DB_AVAILABLE:
                                 try:
-                                    check = session_db.query(Usuario).filter(Usuario.usuario == cad_user).first()
-                                    if check:
+                                    check = session_db.table("usuarios").select("usuario").eq("usuario", cad_user).execute()
+                                    if check.data and len(check.data) > 0:
                                         st.error(f"❌ O usuário '{cad_user}' já existe. Escolha outro.")
                                     else:
                                         dados_insert = {
@@ -1054,7 +1152,7 @@ if not st.session_state.autenticado:
                                 except Exception as e:
                                     st.error(f"❌ Erro: {e}")
                             else:
-                                st.error("❌ Banco de dados indisponível. Não é possível cadastrar no momento.")
+                                st.error("❌ Supabase indisponível. Não é possível cadastrar no momento.")
                                 st.info("💡 Use o login de contingência: admin / admin")
                     else:
                         st.error("❌ Preencha Nome, Usuário e Senha.")
@@ -1390,7 +1488,14 @@ else:
                             st.session_state.dados_conferencia.at[idx_real, "Situação"] = "Divergente"
                             st.toast("⚠️ Divergência registrada!")
                             safe_rerun()
+
                     if st.button("💾 Gravar no Banco", key=f"save_{idx_real}"):
+                        st.session_state.dados_conferencia.at[idx_real, "Quantidade Conferida"] = qtd_conf
+                        st.session_state.dados_conferencia.at[idx_real, "Observações"] = obs
+                        situacao_final = "Conforme" if qtd_conf == linha['Quantidade NF'] else "Divergente"
+                        st.session_state.dados_conferencia.at[idx_real, "Situação"] = situacao_final
+
+if st.button("💾 Gravar no Banco", key=f"save_{idx_real}"):
                         st.session_state.dados_conferencia.at[idx_real, "Quantidade Conferida"] = qtd_conf
                         st.session_state.dados_conferencia.at[idx_real, "Observações"] = obs
                         situacao_final = "Conforme" if qtd_conf == linha['Quantidade NF'] else "Divergente"
@@ -1415,6 +1520,7 @@ else:
                             except Exception as e:
                                 session_db.rollback()
                                 st.error(f"Erro ao sincronizar: {e}")
+                        safe_rerun()
                         safe_rerun()
             else:
                 st.warning("Nenhum item disponível para seleção.")
