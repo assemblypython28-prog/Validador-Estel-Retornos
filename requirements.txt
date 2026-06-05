@@ -19,12 +19,15 @@ deepface==0.0.89
 retina-face>=0.0.13
 mtcnn>=0.1.1
 
-# Banco de dados
-supabase>=2.0.0
+# Banco de dados (CockroachDB / SQLAlchemy)
+sqlalchemy
+psycopg2-binary
+cockroachdb
 
-# PDFs
+# PDFs e Relatórios
 PyMuPDF>=1.23.0
 pdfminer.six>=20221105
+reportlab>=4.0.0
 
 # Excel
 openpyxl>=3.1.0
@@ -33,11 +36,3 @@ openpyxl>=3.1.0
 requests>=2.31.0
 h5py>=3.10.0
 protobuf>=3.20.0,<5.0.0
-
-reportlab>=4.0.0
-openpyxl>=3.1.0
-
-sqlalchemy
-psycopg2-binary
-
-cockroachdb
