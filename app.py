@@ -1,4 +1,3 @@
-
 import os
 
 
@@ -1495,12 +1494,6 @@ else:
                         situacao_final = "Conforme" if qtd_conf == linha['Quantidade NF'] else "Divergente"
                         st.session_state.dados_conferencia.at[idx_real, "Situação"] = situacao_final
 
-if st.button("💾 Gravar no Banco", key=f"save_{idx_real}"):
-                        st.session_state.dados_conferencia.at[idx_real, "Quantidade Conferida"] = qtd_conf
-                        st.session_state.dados_conferencia.at[idx_real, "Observações"] = obs
-                        situacao_final = "Conforme" if qtd_conf == linha['Quantidade NF'] else "Divergente"
-                        st.session_state.dados_conferencia.at[idx_real, "Situação"] = situacao_final
-
                         if session_db and DB_AVAILABLE:
                             try:
                                 novo_item = ConferenciaItem(
@@ -1520,7 +1513,6 @@ if st.button("💾 Gravar no Banco", key=f"save_{idx_real}"):
                             except Exception as e:
                                 session_db.rollback()
                                 st.error(f"Erro ao sincronizar: {e}")
-                        safe_rerun()
                         safe_rerun()
             else:
                 st.warning("Nenhum item disponível para seleção.")
