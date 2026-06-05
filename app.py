@@ -1,6 +1,5 @@
 import os
 
-
 # ============================================================
 # CONFIGURACAO DO OPENCV E KERAS (ANTES DE TUDO)
 # ============================================================
@@ -16,7 +15,6 @@ import re
 import json
 import numpy as np
 from PIL import Image
-from supabase import create_client, Client
 
 # ============================================================
 # COMPATIBILIDADE: safe_rerun()
@@ -72,35 +70,53 @@ div[data-testid="stMetricValue"] { font-size: 26px; font-weight: 700; color: #1E
 """, unsafe_allow_html=True)
 
 # ============================================================
-# CONEXAO COM BANCO DE DADOS (SUPABASE)
+# CONEXAO COM BANCO DE DADOS (COCKROACHDB / POSTGRESQL)
 # ============================================================
-SUPABASE_AVAILABLE = False
-supabase = None
-supabase_error_msg = ""
+from sqlalchemy import create_engine, Column, Integer, String, Float, Text
+from sqlalchemy.orm import declarative_base, sessionmaker
 
-def init_supabase():
-    global SUPABASE_AVAILABLE, supabase, supabase_error_msg
+Base = declarative_base()
+DB_AVAILABLE = False
+db_error_msg = ""
+session_db = None
+
+class Usuario(Base):
+    __tablename__ = "usuarios"
+    id = Column(Integer, primary_key=True)
+    nome = Column(String(255), nullable=False)
+    usuario = Column(String(100), unique=True, nullable=False)
+    senha = Column(String(255), nullable=False)
+    face_embedding = Column(Text, nullable=True)
+    email = Column(String(255), nullable=True)
+    cargo = Column(String(100), nullable=True)
+
+class ConferenciaItem(Base):
+    __tablename__ = "conferencia_itens"
+    id = Column(Integer, primary_key=True)
+    operador = Column(String(255), nullable=False)
+    usuario_id = Column(Integer, nullable=True)
+    nome_arquivo = Column(String(500), nullable=False)
+    descricao_produto = Column(String(1000), nullable=False)
+    quantidade_nf = Column(Float, nullable=False)
+    quantidade_conferida = Column(Float, nullable=False)
+    situacao = Column(String(50), nullable=False)
+    observacoes = Column(Text, nullable=True)
+    data_hora = Column(String(20), nullable=False)
+
+def init_db():
+    global DB_AVAILABLE, db_error_msg, session_db
     try:
-        url = st.secrets["SUPABASE_URL"]
-        key = st.secrets["SUPABASE_KEY"]
-        if not url or not key:
-            supabase_error_msg = "SUPABASE_URL ou SUPABASE_KEY vazios nos secrets"
-            return
-        supabase = create_client(url, key)
-        try:
-            test = supabase.table("usuarios").select("id").limit(1).execute()
-            SUPABASE_AVAILABLE = True
-        except Exception as e:
-            if "does not exist" in str(e).lower() or "relation" in str(e).lower():
-                SUPABASE_AVAILABLE = True
-                supabase_error_msg = "Tabela 'usuarios' não encontrada."
-            else:
-                supabase_error_msg = f"Erro: {str(e)[:80]}"
+        DATABASE_URL = "postgresql+psycopg2://almox:H31u6KWGzHjnu4EWXOCXrQ@kooky-singer-16481.jxf.gcp-us-east1.cockroachlabs.cloud:26257/defaultdb?sslmode=require"
+        engine = create_engine(DATABASE_URL, pool_pre_ping=True, connect_args={"connect_timeout": 10})
+        Base.metadata.create_all(engine)
+        Session = sessionmaker(bind=engine)
+        session_db = Session()
+        DB_AVAILABLE = True
     except Exception as e:
-        supabase_error_msg = f"Falha: {str(e)[:80]}"
-        SUPABASE_AVAILABLE = False
+        db_error_msg = f"Falha: {str(e)[:80]}"
+        DB_AVAILABLE = False
 
-init_supabase()
+init_db()
 
 # Session State
 if "autenticado" not in st.session_state:
@@ -121,7 +137,6 @@ if "item_selecionado_idx" not in st.session_state:
     st.session_state.item_selecionado_idx = None
 if "mostrar_cadastro" not in st.session_state:
     st.session_state.mostrar_cadastro = False
-
 # ============================================================
 # ENGENHARIA DE IA FACIAL (DEEPFACE)
 # ============================================================
@@ -746,35 +761,40 @@ def render_dashboard(df):
                 """, unsafe_allow_html=True)
         else:
             st.caption("Nenhum item conferido ainda.")
-
 # ============================================================
 # FUNCOES DE LOGIN E CADASTRO
 # ============================================================
-def buscar_usuario_por_credenciais(supabase_client, usuario, senha):
+def buscar_usuario_por_credenciais(session_db, usuario, senha):
     """Busca usuario por login e senha. Retorna dict ou None."""
     try:
-        result = supabase_client.table("usuarios").select("*").eq("usuario", usuario).execute()
-        if result.data and len(result.data) > 0:
-            user = result.data[0]
-            if user.get("senha") == senha:
-                return user
+        user = session_db.query(Usuario).filter(Usuario.usuario == usuario).first()
+        if user and user.senha == senha:
+            return {
+                "id": user.id,
+                "nome": user.nome,
+                "usuario": user.usuario,
+                "senha": user.senha,
+                "face_embedding": user.face_embedding,
+                "email": user.email,
+                "cargo": user.cargo
+            }
         return None
     except Exception as e:
         st.error(f"Erro ao consultar usuário: {str(e)[:100]}")
         return None
 
-def buscar_usuario_por_biometria(supabase_client, vetor_atual):
+def buscar_usuario_por_biometria(session_db, vetor_atual):
     """Busca usuario por biometria facial. Retorna (user_dict, score) ou (None, 0)."""
     try:
-        result = supabase_client.table("usuarios").select("*").execute()
-        if not result.data:
+        usuarios = session_db.query(Usuario).all()
+        if not usuarios:
             return None, 0.0
 
         melhor_score = 0.0
         melhor_usuario = None
 
-        for usuario in result.data:
-            face_emb = usuario.get("face_embedding")
+        for usuario in usuarios:
+            face_emb = usuario.face_embedding
             if not face_emb:
                 continue
             try:
@@ -786,7 +806,15 @@ def buscar_usuario_por_biometria(supabase_client, vetor_atual):
                 score = calcular_similaridade(vetor_atual, vetor_salvo)
                 if score > melhor_score:
                     melhor_score = score
-                    melhor_usuario = usuario
+                    melhor_usuario = {
+                        "id": usuario.id,
+                        "nome": usuario.nome,
+                        "usuario": usuario.usuario,
+                        "senha": usuario.senha,
+                        "face_embedding": usuario.face_embedding,
+                        "email": usuario.email,
+                        "cargo": usuario.cargo
+                    }
             except Exception:
                 continue
 
@@ -795,27 +823,24 @@ def buscar_usuario_por_biometria(supabase_client, vetor_atual):
         st.error(f"Erro na busca biométrica: {str(e)[:100]}")
         return None, 0.0
 
-def inserir_usuario_robusto(supabase_client, dados):
-    """Tenta inserir usuario, removendo colunas opcionais se necessario."""
-    dados_insert = dados.copy()
-    colunas_opcionais = ["email", "cargo", "ativo", "created_at"]
-
-    for _ in range(10):
-        try:
-            result = supabase_client.table("usuarios").insert(dados_insert).execute()
-            return True, result
-        except Exception as e:
-            erro = str(e)
-            if "PGRST204" in erro or "Could not find" in erro:
-                match = re.search(r"'([^']+)' column", erro)
-                if match:
-                    col = match.group(1)
-                    if col in dados_insert and col not in ["nome", "usuario", "senha", "face_embedding"]:
-                        dados_insert.pop(col)
-                        continue
-            return False, erro
-    return False, "Max tentativas"
-
+def inserir_usuario_robusto(session_db, dados):
+    """Tenta inserir usuario via SQLAlchemy. Retorna (True, user) ou (False, erro)."""
+    try:
+        novo = Usuario(
+            nome=dados.get("nome"),
+            usuario=dados.get("usuario"),
+            senha=dados.get("senha"),
+            face_embedding=dados.get("face_embedding"),
+            email=dados.get("email"),
+            cargo=dados.get("cargo")
+        )
+        session_db.add(novo)
+        session_db.commit()
+        session_db.refresh(novo)
+        return True, novo
+    except Exception as e:
+        session_db.rollback()
+        return False, str(e)
 # ============================================================
 # PAINEL DE AUTENTICACAO (LOGIN + CADASTRO)
 # ============================================================
@@ -827,8 +852,8 @@ if not st.session_state.autenticado:
         </div>
     """, unsafe_allow_html=True)
 
-    if not SUPABASE_AVAILABLE:
-        st.warning(f"⚠️ Supabase indisponível: {supabase_error_msg}")
+    if not DB_AVAILABLE:
+        st.warning(f"⚠️ Banco de dados indisponível: {db_error_msg}")
         st.info("💡 O sistema funcionará em modo local com login de contingência.")
 
     c_esq, c_centro, c_dir = st.columns([1, 1.4, 1])
@@ -864,8 +889,8 @@ if not st.session_state.autenticado:
                 vetor_atual = processar_biometria(foto_captura)
 
                 if vetor_atual is not None:
-                    if supabase and SUPABASE_AVAILABLE:
-                        usuario_encontrado, score = buscar_usuario_por_biometria(supabase, vetor_atual)
+                    if session_db and DB_AVAILABLE:
+                        usuario_encontrado, score = buscar_usuario_por_biometria(session_db, vetor_atual)
 
                         if usuario_encontrado and score > 0.70:
                             st.success(f"✅ Bem-vindo, {usuario_encontrado['nome']}!")
@@ -882,7 +907,7 @@ if not st.session_state.autenticado:
                             st.info("💡 Use a **Opção 2** (Login com Senha) ou **Opção 3** (Cadastrar-se).")
                             st.session_state.temp_face_vector = vetor_atual
                     else:
-                        st.warning("⚠️ Supabase indisponível. Biometria desativada.")
+                        st.warning("⚠️ Banco de dados indisponível. Biometria desativada.")
                         st.info("💡 Use a **Opção 2** (Login com Senha) ou modo offline.")
                 else:
                     st.error("⚠️ Não foi possível detectar o rosto.")
@@ -914,8 +939,8 @@ if not st.session_state.autenticado:
             with col_btn1:
                 if st.button("🔓 Entrar", type="primary", use_container_width=True):
                     if login_user and login_pass:
-                        if supabase and SUPABASE_AVAILABLE:
-                            user = buscar_usuario_por_credenciais(supabase, login_user, login_pass)
+                        if session_db and DB_AVAILABLE:
+                            user = buscar_usuario_por_credenciais(session_db, login_user, login_pass)
                             if user:
                                 st.success(f"✅ Bem-vindo, {user['nome']}!")
                                 st.session_state.autenticado = True
@@ -934,7 +959,7 @@ if not st.session_state.autenticado:
                                 time.sleep(1)
                                 safe_rerun()
                             else:
-                                st.error("❌ Modo offline. Use admin/admin ou cadastre-se no Supabase.")
+                                st.error("❌ Modo offline. Use admin/admin ou cadastre-se no banco.")
                     else:
                         st.warning("⚠️ Preencha usuário e senha.")
 
@@ -997,10 +1022,10 @@ if not st.session_state.autenticado:
                         if len(cad_senha) < 4:
                             st.error("❌ A senha deve ter pelo menos 4 caracteres.")
                         else:
-                            if supabase and SUPABASE_AVAILABLE:
+                            if session_db and DB_AVAILABLE:
                                 try:
-                                    check = supabase.table("usuarios").select("usuario").eq("usuario", cad_user).execute()
-                                    if check.data and len(check.data) > 0:
+                                    check = session_db.query(Usuario).filter(Usuario.usuario == cad_user).first()
+                                    if check:
                                         st.error(f"❌ O usuário '{cad_user}' já existe. Escolha outro.")
                                     else:
                                         dados_insert = {
@@ -1015,7 +1040,7 @@ if not st.session_state.autenticado:
                                         if vetor_cadastro:
                                             dados_insert["face_embedding"] = json.dumps(vetor_cadastro)
 
-                                        sucesso, resultado = inserir_usuario_robusto(supabase, dados_insert)
+                                        sucesso, resultado = inserir_usuario_robusto(session_db, dados_insert)
 
                                         if sucesso:
                                             st.success("🎉 Cadastro realizado com sucesso!")
@@ -1029,14 +1054,14 @@ if not st.session_state.autenticado:
                                 except Exception as e:
                                     st.error(f"❌ Erro: {e}")
                             else:
-                                st.error("❌ Supabase indisponível. Não é possível cadastrar no momento.")
+                                st.error("❌ Banco de dados indisponível. Não é possível cadastrar no momento.")
                                 st.info("💡 Use o login de contingência: admin / admin")
                     else:
                         st.error("❌ Preencha Nome, Usuário e Senha.")
 
                 st.markdown('</div>', unsafe_allow_html=True)
 
-        if not SUPABASE_AVAILABLE:
+        if not DB_AVAILABLE:
             st.markdown("---")
             st.caption("🟡 Sistema em modo offline. Login de contingência: **admin / admin**")
 
@@ -1046,7 +1071,7 @@ if not st.session_state.autenticado:
 else:
     cab_esquerdo, cab_direito = st.columns([4, 1])
     cab_esquerdo.markdown(f"<h1>🚚 Validador de Retornos de Obra</h1>", unsafe_allow_html=True)
-    cab_esquerdo.caption(f"Operador: **{st.session_state.usuario_nome}** | {'🟢 Online' if SUPABASE_AVAILABLE else '🟡 Offline'}")
+    cab_esquerdo.caption(f"Operador: **{st.session_state.usuario_nome}** | {'🟢 Online' if DB_AVAILABLE else '🟡 Offline'}")
 
     if cab_direito.button("🚪 Sair", key="logout"):
         st.session_state.autenticado = False
@@ -1060,80 +1085,6 @@ else:
 
     # SIDEBAR
     with st.sidebar:
-        # ============================================================
-        # ALTERAÇÃO 3: MEMÓRIA PERSISTENTE DE OBRA/PARADA
-        # ============================================================
-        CONFIG_PATH = "config_app.json"
-
-        def carregar_config():
-            """Carrega configuração local de obra/parada."""
-            try:
-                if os.path.exists(CONFIG_PATH):
-                    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                        return json.load(f)
-            except Exception:
-                pass
-            return {}
-
-        def salvar_config(config):
-            """Salva configuração local."""
-            try:
-                with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-                    json.dump(config, f, ensure_ascii=False, indent=2)
-            except Exception as e:
-                st.caption(f"⚠️ Não foi possível salvar config local: {e}")
-
-        # Carrega config persistida
-        config_local = carregar_config()
-
-        # Inicializa no session_state se não existir
-        if "obra_parada" not in st.session_state:
-            # Tenta query params primeiro (URL), depois arquivo local, depois default
-            query_params = st.query_params
-            obra_param = query_params.get("obra", [None])[0] if "obra" in query_params else None
-            st.session_state.obra_parada = obra_param or config_local.get("obra_parada", "")
-
-        st.header("🏗️ Obra / Parada")
-
-        col_obra, col_salvar = st.columns([3, 1])
-        with col_obra:
-            obra_input = st.text_input(
-                "Identificação da Obra:",
-                value=st.session_state.obra_parada,
-                placeholder="Ex: OB-2024-001 | Parada 3",
-                key="input_obra_parada",
-                label_visibility="collapsed"
-            )
-
-        with col_salvar:
-            if st.button("💾", help="Salvar esta obra como padrão", key="btn_salvar_obra"):
-                st.session_state.obra_parada = obra_input
-                config_local["obra_parada"] = obra_input
-                salvar_config(config_local)
-                # Atualiza query params para persistência por URL
-                st.query_params["obra"] = obra_input
-                st.toast("✅ Obra salva!")
-                safe_rerun()
-
-        # Sincroniza session_state com input em tempo real
-        if obra_input != st.session_state.obra_parada:
-            st.session_state.obra_parada = obra_input
-
-        # Exibe badge da obra atual se preenchida
-        if st.session_state.obra_parada:
-            st.markdown(f"""
-            <div style="background:#F0FDF4; border:1px solid #86EFAC; padding:6px 12px; 
-                        border-radius:6px; margin-bottom:12px; font-size:12px;">
-                <span style="color:#166534; font-weight:600;">🏗️ Atual:</span> 
-                <span style="color:#1E293B;">{st.session_state.obra_parada}</span>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.warning("⚠️ Defina a Obra/Parada antes de iniciar.")
-
-        st.markdown("---")
-        # ============================================================
-
         st.header("📥 Carregar Documentos")
 
         # Info sobre bibliotecas disponíveis
@@ -1208,304 +1159,61 @@ else:
                         st.info("💡 Verifique se os PDFs são DANFEs ou se as planilhas têm colunas de descrição e quantidade.")
 
         # ============================================================
-        # ALTERAÇÃO 4: EXPORTAÇÃO PROFISSIONAL (EXCEL + PDF)
+        # EXPORTAÇÃO EM EXCEL - CORRIGIDA E MELHORADA
         # ============================================================
         if not st.session_state.dados_conferencia.empty:
             st.markdown("---")
             st.header("📤 Exportar Relatório")
 
-            # --- ABA DE EXPORTAÇÃO ---
-            tab_excel, tab_pdf = st.tabs(["📊 Excel", "📄 PDF"])
-
-            # ==================== EXCEL MELHORADO ====================
-            with tab_excel:
-                try:
-                    memoria_excel = io.BytesIO()
-                    with pd.ExcelWriter(memoria_excel, engine='openpyxl') as writer:
-                        # Aba principal com formatação
-                        df_export = st.session_state.dados_conferencia.copy()
-                        # Adiciona coluna de Obra/Parada
-                        df_export["Obra/Parada"] = st.session_state.get("obra_parada", "Não informada")
-                        df_export.to_excel(writer, index=False, sheet_name="Consolidado")
-
-                        # Aba de resumo executivo
-                        df = st.session_state.dados_conferencia
-                        obra = st.session_state.get("obra_parada", "Não informada")
-
-                        resumo_data = {
-                            'Métrica': [
-                                'Obra / Parada',
-                                'Total de Itens',
-                                'Conformes',
-                                'Divergentes', 
-                                'Pendentes',
-                                'Com Foto',
-                                'Taxa de Conformidade',
-                                'Operador',
-                                'Data/Hora'
-                            ],
-                            'Valor': [
-                                obra,
-                                len(df),
-                                len(df[df["Situação"] == "Conforme"]),
-                                len(df[df["Situação"] == "Divergente"]),
-                                len(df[df["Situação"] == "Pendente"]),
-                                len(df[df["Foto Capturada"] == "Sim"]),
-                                f"{(len(df[df['Situação'] == 'Conforme']) / len(df) * 100):.1f}%" if len(df) > 0 else "0%",
-                                st.session_state.usuario_nome,
-                                time.strftime("%Y-%m-%d %H:%M:%S")
-                            ]
-                        }
-                        pd.DataFrame(resumo_data).to_excel(
-                            writer, index=False, sheet_name="Resumo Executivo"
-                        )
-
-                        # Aba de itens por classificação (se existir coluna)
-                        if "Classificação" in df.columns or any("[" in str(o) for o in df.get("Observações", [])):
-                            # Extrai classificações das observações
-                            df_class = df.copy()
-                            df_class["Classificação_Extraída"] = df_class["Observações"].apply(
-                                lambda x: re.search(r'\[(Aprovado|Reparo|Avaria)\]', str(x)).group(1) 
-                                if re.search(r'\[(Aprovado|Reparo|Avaria)\]', str(x)) else "Aprovado"
-                            )
-                            class_summary = df_class["Classificação_Extraída"].value_counts().reset_index()
-                            class_summary.columns = ["Classificação", "Quantidade"]
-                            class_summary.to_excel(writer, index=False, sheet_name="Classificação")
-
-                    st.download_button(
-                        label="💾 Exportar Excel Profissional (.xlsx)",
-                        data=memoria_excel.getvalue(),
-                        file_name=f"Relatorio_Estel_{st.session_state.get('obra_parada','Geral').replace(' ','_')}_{time.strftime('%Y%m%d_%H%M%S')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
+            try:
+                memoria_excel = io.BytesIO()
+                with pd.ExcelWriter(memoria_excel, engine='openpyxl') as writer:
+                    # Aba principal com todos os dados
+                    st.session_state.dados_conferencia.to_excel(
+                        writer, 
+                        index=False, 
+                        sheet_name="Consolidado"
                     )
-                except Exception as e:
-                    st.error(f"❌ Erro ao gerar Excel: {str(e)[:100]}")
-                    st.info("💡 Tente instalar: pip install openpyxl")
 
-            # ==================== PDF PROFISSIONAL ====================
-            with tab_pdf:
-                try:
-                    from reportlab.lib import colors
-                    from reportlab.lib.pagesizes import A4, landscape
-                    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image as RLImage
-                    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-                    from reportlab.lib.units import cm
-                    from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
-                    from reportlab.graphics.shapes import Drawing
-                    from reportlab.graphics.charts.piecharts import Pie
-                except ImportError:
-                    st.warning("⚠️ ReportLab não instalado. PDF indisponível.")
-                    st.code("pip install reportlab", language="bash")
-                    st.stop()
-
-                if st.button("📄 Gerar Relatório PDF Profissional", use_container_width=True, type="primary"):
-                    with st.spinner("Gerando PDF corporativo..."):
-                        memoria_pdf = io.BytesIO()
-                        doc = SimpleDocTemplate(
-                            memoria_pdf,
-                            pagesize=A4,
-                            rightMargin=2*cm,
-                            leftMargin=2*cm,
-                            topMargin=2*cm,
-                            bottomMargin=2*cm
-                        )
-
-                        elements = []
-                        styles = getSampleStyleSheet()
-
-                        # Estilos customizados
-                        titulo_style = ParagraphStyle(
-                            'Titulo',
-                            parent=styles['Heading1'],
-                            fontSize=18,
-                            textColor=colors.HexColor("#0284C7"),
-                            spaceAfter=6,
-                            alignment=TA_CENTER,
-                            fontName='Helvetica-Bold'
-                        )
-                        subtitulo_style = ParagraphStyle(
-                            'Subtitulo',
-                            parent=styles['Normal'],
-                            fontSize=10,
-                            textColor=colors.HexColor("#64748B"),
-                            alignment=TA_CENTER,
-                            spaceAfter=20
-                        )
-                        header_style = ParagraphStyle(
-                            'Header',
-                            parent=styles['Normal'],
-                            fontSize=9,
-                            textColor=colors.white,
-                            alignment=TA_CENTER,
-                            fontName='Helvetica-Bold'
-                        )
-
-                        # === CABEÇALHO ===
-                        elements.append(Paragraph("VALIDADOR DE RETORNOS DE OBRA", titulo_style))
-                        elements.append(Paragraph(f"Relatório de Conferência | Obra: <b>{st.session_state.get('obra_parada', 'Não informada')}</b>", subtitulo_style))
-
-                        # Info box
-                        df = st.session_state.dados_conferencia
-                        total = len(df)
-                        conformes = len(df[df["Situação"] == "Conforme"])
-                        divergentes = len(df[df["Situação"] == "Divergente"])
-                        pendentes = len(df[df["Situação"] == "Pendente"])
-                        com_foto = len(df[df["Foto Capturada"] == "Sim"])
-
-                        info_data = [
-                            [f"Operador: {st.session_state.usuario_nome}", 
-                             f"Data: {time.strftime('%d/%m/%Y %H:%M')}",
-                             f"Total Itens: {total}"]
+                    # Aba de resumo
+                    df = st.session_state.dados_conferencia
+                    resumo_data = {
+                        'Métrica': [
+                            'Total de Itens',
+                            'Conformes',
+                            'Divergentes', 
+                            'Pendentes',
+                            'Com Foto',
+                            'Operador',
+                            'Data/Hora'
+                        ],
+                        'Valor': [
+                            len(df),
+                            len(df[df["Situação"] == "Conforme"]),
+                            len(df[df["Situação"] == "Divergente"]),
+                            len(df[df["Situação"] == "Pendente"]),
+                            len(df[df["Foto Capturada"] == "Sim"]),
+                            st.session_state.usuario_nome,
+                            time.strftime("%Y-%m-%d %H:%M:%S")
                         ]
-                        info_table = Table(info_data, colWidths=[6*cm, 6*cm, 6*cm])
-                        info_table.setStyle(TableStyle([
-                            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#F1F5F9")),
-                            ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor("#334155")),
-                            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
-                            ('FONTSIZE', (0, 0), (-1, -1), 9),
-                            ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
-                            ('TOPPADDING', (0, 0), (-1, -1), 10),
-                            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
-                            ('LEFTPADDING', (0, 0), (-1, -1), 8),
-                            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
-                        ]))
-                        elements.append(info_table)
-                        elements.append(Spacer(1, 0.4*cm))
+                    }
+                    pd.DataFrame(resumo_data).to_excel(
+                        writer,
+                        index=False,
+                        sheet_name="Resumo"
+                    )
 
-                        # === MÉTRICAS RÁPIDAS ===
-                        metricas_data = [
-                            ["CONFORMES", "DIVERGENTES", "PENDENTES", "COM FOTO"],
-                            [str(conformes), str(divergentes), str(pendentes), str(com_foto)],
-                            [f"{(conformes/total*100):.1f}%" if total else "0%", 
-                             f"{(divergentes/total*100):.1f}%" if total else "0%",
-                             f"{(pendentes/total*100):.1f}%" if total else "0%",
-                             f"{(com_foto/total*100):.1f}%" if total else "0%"]
-                        ]
-                        metricas_table = Table(metricas_data, colWidths=[4.5*cm]*4)
-                        metricas_table.setStyle(TableStyle([
-                            # Header
-                            ('BACKGROUND', (0, 0), (0, 0), colors.HexColor("#22C55E")),
-                            ('BACKGROUND', (1, 0), (1, 0), colors.HexColor("#EF4444")),
-                            ('BACKGROUND', (2, 0), (2, 0), colors.HexColor("#F59E0B")),
-                            ('BACKGROUND', (3, 0), (3, 0), colors.HexColor("#0284C7")),
-                            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-                            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                            ('FONTSIZE', (0, 0), (-1, 0), 10),
-                            # Valores
-                            ('FONTNAME', (0, 1), (-1, 1), 'Helvetica-Bold'),
-                            ('FONTSIZE', (0, 1), (-1, 1), 16),
-                            ('TEXTCOLOR', (0, 1), (0, 1), colors.HexColor("#166534")),
-                            ('TEXTCOLOR', (1, 1), (1, 1), colors.HexColor("#991B1B")),
-                            ('TEXTCOLOR', (2, 1), (2, 1), colors.HexColor("#92400E")),
-                            ('TEXTCOLOR', (3, 1), (3, 1), colors.HexColor("#0C4A6E")),
-                            # Porcentagens
-                            ('FONTSIZE', (0, 2), (-1, 2), 9),
-                            ('TEXTCOLOR', (0, 2), (-1, 2), colors.HexColor("#64748B")),
-                            # Grid geral
-                            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E8F0")),
-                            ('TOPPADDING', (0, 0), (-1, -1), 8),
-                            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
-                            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor("#FAFAFA")),
-                        ]))
-                        elements.append(metricas_table)
-                        elements.append(Spacer(1, 0.6*cm))
+                st.download_button(
+                    label="💾 Exportar Excel (.xlsx)",
+                    data=memoria_excel.getvalue(),
+                    file_name=f"Relatorio_Estel_{time.strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            except Exception as e:
+                st.error(f"❌ Erro ao gerar Excel: {str(e)[:100]}")
+                st.info("💡 Tente instalar: pip install openpyxl")
 
-                        # === TABELA PRINCIPAL ===
-                        elements.append(Paragraph("<b>📋 Itens Conferidos</b>", styles['Heading3']))
-                        elements.append(Spacer(1, 0.2*cm))
-
-                        # Prepara dados da tabela
-                        tabela_headers = ["#", "Descrição do Produto", "Qtd NF", "Qtd Conf.", "Situação", "Foto", "Observações"]
-                        tabela_data = [tabela_headers]
-
-                        for i, (_, row) in enumerate(df.iterrows(), 1):
-                            status = row['Situação']
-                            status_color = {
-                                "Conforme": colors.HexColor("#DCFCE7"),
-                                "Divergente": colors.HexColor("#FEE2E2"),
-                                "Pendente": colors.HexColor("#FEF3C7")
-                            }.get(status, colors.HexColor("#F1F5F9"))
-
-                            obs_text = str(row.get('Observações', ''))[:60]
-                            # Extrai classificação se existir
-                            class_match = re.search(r'\[(Aprovado|Reparo|Avaria)\]', str(row.get('Observações', '')))
-                            if class_match:
-                                obs_text = f"[{class_match.group(1)}] " + re.sub(r'\[(Aprovado|Reparo|Avaria)\]\s*', '', str(row.get('Observações', '')))[:50]
-
-                            tabela_data.append([
-                                str(i),
-                                Paragraph(str(row['Descrição do Produto'])[:50], styles['Normal']),
-                                f"{row['Quantidade NF']:.2f}".rstrip('0').rstrip('.'),
-                                f"{row['Quantidade Conferida']:.2f}".rstrip('0').rstrip('.'),
-                                Paragraph(f"<b>{status}</b>", styles['Normal']),
-                                "✅" if row['Foto Capturada'] == 'Sim' else '❌',
-                                Paragraph(obs_text, styles['Normal'])
-                            ])
-
-                        # Cria tabela com larguras proporcionais
-                        tabela = Table(tabela_data, colWidths=[0.8*cm, 5.5*cm, 1.8*cm, 1.8*cm, 2.2*cm, 1.2*cm, 4.2*cm], repeatRows=1)
-                        tabela.setStyle(TableStyle([
-                            # Header
-                            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#0284C7")),
-                            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-                            ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-                            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                            ('FONTSIZE', (0, 0), (-1, 0), 9),
-                            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
-                            ('TOPPADDING', (0, 0), (-1, 0), 10),
-                            # Body
-                            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-                            ('FONTSIZE', (0, 1), (-1, -1), 8),
-                            ('ALIGN', (0, 1), (0, -1), 'CENTER'),
-                            ('ALIGN', (2, 1), (4, -1), 'CENTER'),
-                            ('ALIGN', (5, 1), (5, -1), 'CENTER'),
-                            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                            # Grid
-                            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
-                            ('LINEBELOW', (0, 0), (-1, 0), 1.5, colors.HexColor("#0284C7")),
-                            # Zebra striping
-                            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.HexColor("#FFFFFF"), colors.HexColor("#F8FAFC")]),
-                            ('LEFTPADDING', (0, 0), (-1, -1), 4),
-                            ('RIGHTPADDING', (0, 0), (-1, -1), 4),
-                            ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
-                            ('TOPPADDING', (0, 1), (-1, -1), 6),
-                        ]))
-
-                        # Colorir células de status individualmente
-                        for i, row in enumerate(df.itertuples(), 1):
-                            status = row.Situação
-                            if status == "Conforme":
-                                tabela.setStyle(TableStyle([('BACKGROUND', (4, i), (4, i), colors.HexColor("#DCFCE7"))]))
-                            elif status == "Divergente":
-                                tabela.setStyle(TableStyle([('BACKGROUND', (4, i), (4, i), colors.HexColor("#FEE2E2"))]))
-                            elif status == "Pendente":
-                                tabela.setStyle(TableStyle([('BACKGROUND', (4, i), (4, i), colors.HexColor("#FEF3C7"))]))
-
-                        elements.append(tabela)
-                        elements.append(Spacer(1, 0.8*cm))
-
-                        # === RODAPÉ ===
-                        elements.append(Paragraph(
-                            f"<i>Documento gerado automaticamente pelo Validador de Retornos de Obra - Estel | {time.strftime('%d/%m/%Y %H:%M:%S')}</i>",
-                            ParagraphStyle('Rodape', parent=styles['Normal'], fontSize=8, textColor=colors.HexColor("#94A3B8"), alignment=TA_CENTER)
-                        ))
-
-                        # Build PDF
-                        doc.build(elements)
-
-                        st.download_button(
-                            label="📥 Baixar Relatório PDF",
-                            data=memoria_pdf.getvalue(),
-                            file_name=f"Relatorio_Estel_{st.session_state.get('obra_parada','Geral').replace(' ','_')}_{time.strftime('%Y%m%d_%H%M%S')}.pdf",
-                            mime="application/pdf",
-                            use_container_width=True
-                        )
-                        st.success("✅ PDF gerado com sucesso!")
-
-            # Botão de limpar (mantido como estava)
             if st.button("🗑️ Limpar Tudo", use_container_width=True):
                 st.session_state.dados_conferencia = pd.DataFrame()
                 st.session_state.fotos_postadas = {}
@@ -1579,23 +1287,10 @@ else:
             else:
                 df_resultado = df_ref.copy()
 
-            # === ALTERAÇÃO 1: LIMPEZA DO FILTRO + DEDUPLICAÇÃO ===
-            # Remove duplicatas por Descrição + Quantidade NF antes de exibir
-            df_resultado = df_resultado.drop_duplicates(
-                subset=["Descrição do Produto", "Quantidade NF"], 
-                keep="first"
-            ).reset_index(drop=True)
-
-            # Recalcula os índices reais no dataframe original para referência
-            indices_resultado = df_resultado.index.tolist() if not df_resultado.empty else []
-
-            opcoes_resultado = []
-            for idx_row, row in df_resultado.iterrows():
-                status_emoji = {"Pendente": "⏳", "Conforme": "✅", "Divergente": "⚠️"}.get(row['Situação'], "⏳")
-                arquivo_curto = row['Arquivo Origem'][:20] + "..." if len(str(row['Arquivo Origem'])) > 20 else row['Arquivo Origem']
-                desc_curta = row['Descrição do Produto'][:50] + "..." if len(str(row['Descrição do Produto'])) > 50 else row['Descrição do Produto']
-                qtd_str = f"{row['Quantidade NF']:.2f}".rstrip('0').rstrip('.')
-                opcoes_resultado.append(f"{status_emoji} {desc_curta}  |  Qtd: {qtd_str}  |  📄 {arquivo_curto}")
+            opcoes_resultado = [
+                f"[{row['Situação']}] [{row['Arquivo Origem'][:25]}] - {row['Descrição do Produto'][:60]}"
+                for _, row in df_resultado.iterrows()
+            ]
 
             if opcoes_resultado:
                 idx_selecionado = st.selectbox(
@@ -1604,18 +1299,15 @@ else:
                     format_func=lambda i: opcoes_resultado[i],
                     key="select_item"
                 )
-                # O idx_real agora é o índice no dataframe deduplicado
-                idx_real = df_resultado.index[idx_selecionado]
-                # Para acessar o df_ref original, precisamos encontrar pela descrição e qtd
-                linha = df_resultado.iloc[idx_selecionado]
-                # Guarda o índice real no df_ref para atualizações
-                # Encontra a primeira ocorrência correspondente no df_ref original
-                mask = (
-                    (df_ref["Descrição do Produto"] == linha["Descrição do Produto"]) & 
-                    (df_ref["Quantidade NF"] == linha["Quantidade NF"])
-                )
-                idx_real_original = df_ref[mask].index[0] if mask.any() else idx_selecionado
-                st.session_state.item_selecionado_idx = idx_real_original
+
+                if indices_resultado:
+                    idx_real = indices_resultado[idx_selecionado]
+                else:
+                    idx_real = df_resultado.index[idx_selecionado]
+
+                st.session_state.item_selecionado_idx = idx_real
+
+                linha = df_ref.loc[idx_real]
 
                 status_class = {
                     "Pendente": "status-pendente",
@@ -1653,124 +1345,75 @@ else:
                 with col_cam:
                     foto_mat = st.camera_input(
                         "📸 Foto do Material:",
-                        key=f"cam_{idx_real_original}"
+                        key=f"cam_{idx_real}"
                     )
                     if foto_mat:
-                        st.session_state.fotos_postadas[idx_real_original] = foto_mat.getvalue()
-                        st.session_state.dados_conferencia.at[idx_real_original, "Foto Capturada"] = "Sim"
+                        st.session_state.fotos_postadas[idx_real] = foto_mat.getvalue()
+                        st.session_state.dados_conferencia.at[idx_real, "Foto Capturada"] = "Sim"
                         st.toast("📸 Foto armazenada!")
                         safe_rerun()
 
-                    if idx_real_original in st.session_state.fotos_postadas:
+                    if idx_real in st.session_state.fotos_postadas:
                         st.image(
-                            st.session_state.fotos_postadas[idx_real_original],
+                            st.session_state.fotos_postadas[idx_real],
                             caption="Foto atual",
                             width=300
                         )
 
                 with col_form:
-                    # === ALTERAÇÃO 2: CLASSIFICAÇÃO DO ESTADO DO MATERIAL ===
-                    st.markdown("#### 📋 Classificação do Material")
-
-                    # Usa segmented_control se disponível (Streamlit >= 1.40), senão radio
-                    if hasattr(st, "segmented_control"):
-                        classificacao = st.segmented_control(
-                            "Estado do Material:",
-                            options=["Aprovado", "Reparo", "Avaria"],
-                            default="Aprovado",
-                            key=f"classif_{idx_real_original}"
-                        )
-                    else:
-                        classificacao = st.radio(
-                            "Estado do Material:",
-                            options=["Aprovado", "Reparo", "Avaria"],
-                            index=0,
-                            horizontal=True,
-                            key=f"classif_{idx_real_original}"
-                        )
-
-                    # Mapeamento visual para cores
-                    cor_class = {"Aprovado": "#22C55E", "Reparo": "#F59E0B", "Avaria": "#EF4444"}
-                    if classificacao:
-                        st.markdown(f"""
-                        <div style="padding:8px 16px; background:{cor_class.get(classificacao, '#E2E8F0')}20; 
-                                    border-left:4px solid {cor_class.get(classificacao, '#64748B')}; 
-                                    border-radius:6px; margin:8px 0;">
-                            <span style="font-weight:600; color:{cor_class.get(classificacao, '#1E293B')};">
-                                Classificação atual: {classificacao}
-                            </span>
-                        </div>
-                        """, unsafe_allow_html=True)
-
                     qtd_conf = st.number_input(
                         "Quantidade real descarregada:",
                         min_value=0.0,
                         value=float(linha['Quantidade NF']),
                         step=0.1,
-                        key=f"qtd_{idx_real_original}"
+                        key=f"qtd_{idx_real}"
                     )
-
-                    obs_base = st.text_area(
+                    obs = st.text_area(
                         "Notas / Divergências:",
                         value=linha['Observações'],
-                        key=f"obs_{idx_real_original}"
+                        key=f"obs_{idx_real}"
                     )
 
-                    # Compõe observações com classificação estruturada
-                    obs_completa = obs_base
-                    if classificacao and classificacao != "Aprovado":
-                        obs_completa = f"[{classificacao}] {obs_base}".strip()
-
-                    col_btn1, col_btn2, col_btn3 = st.columns(3)
+                    col_btn1, col_btn2 = st.columns(2)
                     with col_btn1:
-                        if st.button("✅ Confirmar Conforme", type="primary", key=f"conf_ok_{idx_real_original}"):
-                            st.session_state.dados_conferencia.at[idx_real_original, "Quantidade Conferida"] = linha['Quantidade NF']
-                            st.session_state.dados_conferencia.at[idx_real_original, "Observações"] = obs_completa
-                            st.session_state.dados_conferencia.at[idx_real_original, "Situação"] = "Conforme"
-                            st.toast(f"✅ Item Aprovado! ({classificacao})")
+                        if st.button("✅ Confirmar Conforme", type="primary", key=f"conf_ok_{idx_real}"):
+                            st.session_state.dados_conferencia.at[idx_real, "Quantidade Conferida"] = linha['Quantidade NF']
+                            st.session_state.dados_conferencia.at[idx_real, "Observações"] = obs
+                            st.session_state.dados_conferencia.at[idx_real, "Situação"] = "Conforme"
+                            st.toast("✅ Item confirmado como Conforme!")
                             safe_rerun()
 
                     with col_btn2:
-                        if st.button("⚠️ Registrar Divergência", key=f"conf_div_{idx_real_original}"):
-                            st.session_state.dados_conferencia.at[idx_real_original, "Quantidade Conferida"] = qtd_conf
-                            st.session_state.dados_conferencia.at[idx_real_original, "Observações"] = obs_completa
-                            st.session_state.dados_conferencia.at[idx_real_original, "Situação"] = "Divergente"
-                            st.toast(f"⚠️ Divergência registrada! ({classificacao})")
+                        if st.button("⚠️ Registrar Divergência", key=f"conf_div_{idx_real}"):
+                            st.session_state.dados_conferencia.at[idx_real, "Quantidade Conferida"] = qtd_conf
+                            st.session_state.dados_conferencia.at[idx_real, "Observações"] = obs
+                            st.session_state.dados_conferencia.at[idx_real, "Situação"] = "Divergente"
+                            st.toast("⚠️ Divergência registrada!")
                             safe_rerun()
-
-                    with col_btn3:
-                        if st.button("🔧 Em Reparo/Avaria", key=f"conf_rep_{idx_real_original}"):
-                            st.session_state.dados_conferencia.at[idx_real_original, "Quantidade Conferida"] = qtd_conf
-                            st.session_state.dados_conferencia.at[idx_real_original, "Observações"] = obs_completa
-                            # Status divergente + classificação no campo obs
-                            situacao_reparo = "Divergente" if qtd_conf != linha['Quantidade NF'] else "Conforme"
-                            st.session_state.dados_conferencia.at[idx_real_original, "Situação"] = situacao_reparo
-                            st.toast(f"🔧 Material classificado como: {classificacao}")
-                            safe_rerun()
-
-                    st.markdown("---")
-                    if st.button("💾 Gravar no Banco", key=f"save_{idx_real_original}", use_container_width=True):
-                        st.session_state.dados_conferencia.at[idx_real_original, "Quantidade Conferida"] = qtd_conf
-                        st.session_state.dados_conferencia.at[idx_real_original, "Observações"] = obs_completa
+                    if st.button("💾 Gravar no Banco", key=f"save_{idx_real}"):
+                        st.session_state.dados_conferencia.at[idx_real, "Quantidade Conferida"] = qtd_conf
+                        st.session_state.dados_conferencia.at[idx_real, "Observações"] = obs
                         situacao_final = "Conforme" if qtd_conf == linha['Quantidade NF'] else "Divergente"
-                        st.session_state.dados_conferencia.at[idx_real_original, "Situação"] = situacao_final
+                        st.session_state.dados_conferencia.at[idx_real, "Situação"] = situacao_final
 
-                        if supabase and SUPABASE_AVAILABLE:
+                        if session_db and DB_AVAILABLE:
                             try:
-                                supabase.table("conferencia_itens").insert({
-                                    "operador": st.session_state.usuario_nome,
-                                    "usuario_id": st.session_state.usuario_id,
-                                    "nome_arquivo": linha['Arquivo Origem'],
-                                    "descricao_produto": linha['Descrição do Produto'],
-                                    "quantidade_nf": float(linha['Quantidade NF']),
-                                    "quantidade_conferida": float(qtd_conf),
-                                    "situacao": situacao_final,
-                                    "classificacao_material": classificacao or "Aprovado",
-                                    "observacoes": obs_completa,
-                                    "data_hora": time.strftime("%Y-%m-%d %H:%M:%S")
-                                }).execute()
-                                st.toast("💾 Dados gravados no Supabase!")
+                                novo_item = ConferenciaItem(
+                                    operador=st.session_state.usuario_nome,
+                                    usuario_id=st.session_state.usuario_id,
+                                    nome_arquivo=linha['Arquivo Origem'],
+                                    descricao_produto=linha['Descrição do Produto'],
+                                    quantidade_nf=float(linha['Quantidade NF']),
+                                    quantidade_conferida=float(qtd_conf),
+                                    situacao=situacao_final,
+                                    observacoes=obs,
+                                    data_hora=time.strftime("%Y-%m-%d %H:%M:%S")
+                                )
+                                session_db.add(novo_item)
+                                session_db.commit()
+                                st.toast("💾 Dados gravados no CockroachDB!")
                             except Exception as e:
+                                session_db.rollback()
                                 st.error(f"Erro ao sincronizar: {e}")
                         safe_rerun()
             else:
