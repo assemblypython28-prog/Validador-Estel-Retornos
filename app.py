@@ -31,82 +31,14 @@ def safe_rerun():
 # ============================================================
 # CONFIGURACAO VISUAL E ESTILO
 # ============================================================
-st.set_page_config(
-    page_title="Validador de Retorno de Obra - Estel",
-    page_icon="🚚",
-    layout="wide"
-)
-
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-html, body, [class*="css"] { font-family: "Inter", sans-serif; background-color: #F8FAFC; }
-div[data-testid="stMetricValue"] { font-size: 26px; font-weight: 700; color: #1E293B; }
-.stButton>button { width: 100%; border-radius: 8px; height: 42px; background-color: #0284C7; color: white; font-weight: 600; border: none; }
-.stButton>button:hover { background-color: #0369A1; }
-.stCameraInput>div>button { background-color: #0284C7 !important; color: white !important; }
-.card-conferencia { background: white; border: 1px solid #E2E8F0; padding: 20px; border-radius: 12px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-[data-testid="stSidebar"] { background-color: white; border-right: 1px solid #E2E8F0; }
-
-.busca-container { background: linear-gradient(135deg, #E0F2FE 0%, #F0F9FF 100%); padding: 16px; border-radius: 12px; border-left: 4px solid #0284C7; margin-bottom: 16px; }
-.busca-resultado { background: #F0FDF4; padding: 12px; border-radius: 8px; border-left: 4px solid #22C55E; margin: 8px 0; }
-.busca-vazio { background: #FEF2F2; padding: 12px; border-radius: 8px; border-left: 4px solid #EF4444; margin: 8px 0; }
-
-.dashboard-card { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); border: 1px solid #E2E8F0; }
-.dashboard-metric { font-size: 32px; font-weight: 700; color: #0284C7; }
-.dashboard-label { font-size: 13px; color: #64748B; text-transform: uppercase; letter-spacing: 0.5px; }
-.progress-bar { width: 100%; height: 8px; background: #E2E8F0; border-radius: 4px; overflow: hidden; }
-.progress-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
-.status-badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
-.status-pendente { background: #FEF3C7; color: #92400E; }
-.status-conforme { background: #DCFCE7; color: #166534; }
-.status-divergente { background: #FEE2E2; color: #991B1B; }
-
-.login-box { background: white; border: 1px solid #E2E8F0; padding: 24px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-top: 16px; }
-.divider { display: flex; align-items: center; margin: 20px 0; color: #64748B; font-size: 13px; }
-.divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: #E2E8F0; margin: 0 12px; }
-
-.cadastro-box { background: linear-gradient(135deg, #F0FDF4 0%, #DCFCE7 100%); border: 1px solid #86EFAC; padding: 20px; border-radius: 12px; margin-top: 16px; }
-</style>
-""", unsafe_allow_html=True)
-
-import os
-
-# ============================================================
-# CONFIGURACAO DO OPENCV E KERAS (ANTES DE TUDO)
-# ============================================================
-os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '0'
-os.environ['TF_USE_LEGACY_KERAS'] = '1'
-
-import cv2
-import streamlit as st
-import pandas as pd
-import time
-import io
-import re
-import json
-import numpy as np
-from PIL import Image
-
-# ============================================================
-# COMPATIBILIDADE: safe_rerun()
-# ============================================================
-def safe_rerun():
-    if hasattr(st, 'rerun'):
-        st.rerun()
-    elif hasattr(st, 'experimental_rerun'):
-        st.experimental_rerun()
-    else:
-        st.markdown('<meta http-equiv="refresh" content="0">', unsafe_allow_html=True)
-
-# ============================================================
-# CONFIGURACAO VISUAL E ESTILO
-# ============================================================
-st.set_page_config(
-    page_title="Validador de Retorno de Obra - Estel",
-    page_icon="🚚",
-    layout="wide"
-)
+try:
+    st.set_page_config(
+        page_title="Validador de Retorno de Obra - Estel",
+        page_icon="🚚",
+        layout="wide"
+    )
+except Exception:
+    pass
 
 st.markdown("""
 <style>
