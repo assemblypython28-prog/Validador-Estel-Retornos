@@ -1,6 +1,5 @@
 import os
 
-
 # ============================================================
 # CONFIGURACAO DO OPENCV E KERAS (ANTES DE TUDO)
 # ============================================================
@@ -16,6 +15,55 @@ import re
 import json
 import numpy as np
 from PIL import Image
+import datetime
+
+# ============================================================
+# CONEXAO COM BANCO DE DADOS (SQLALCHEMY / COCKROACHDB)
+# ============================================================
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Text
+from sqlalchemy.orm import declarative_base, sessionmaker
+
+# Configure a URL com suas credenciais do CockroachDB
+DATABASE_URL = "cockroachdb://usuario:senha@host:26257/nome_do_banco?sslmode=verify-full"
+
+Base = declarative_base()
+
+class Usuario(Base):
+    __tablename__ = 'usuarios'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    nome = Column(String(255), nullable=False)
+    matricula = Column(String(100), unique=True, nullable=False)
+    senha = Column(String(255), nullable=False)
+    embedding_facial = Column(Text) # Armazenado em formato JSON string
+    email = Column(String(255))
+    cargo = Column(String(255))
+
+class ConferenciaItem(Base):
+    __tablename__ = 'conferencia_itens'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    operador = Column(String(255))
+    usuario_id = Column(Integer)
+    nome_arquivo = Column(String(255))
+    descricao_produto = Column(Text)
+    quantidade_nf = Column(Float)
+    quantidade_conferida = Column(Float)
+    situacao = Column(String(100))
+    observacoes = Column(Text)
+    data_hora = Column(DateTime, default=datetime.datetime.utcnow)
+
+DB_AVAILABLE = False
+SessionLocal = None
+
+try:
+    # Criação do engine e das tabelas automaticamente
+    engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+    Base.metadata.create_all(engine)
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    DB_AVAILABLE = True
+except Exception as e:
+    st.error(f"Erro de conexão com o CockroachDB: {e}")
+    DB_AVAILABLE = False
+
 
 # ============================================================
 # COMPATIBILIDADE: safe_rerun()
@@ -31,14 +79,11 @@ def safe_rerun():
 # ============================================================
 # CONFIGURACAO VISUAL E ESTILO
 # ============================================================
-try:
-    st.set_page_config(
-        page_title="Validador de Retorno de Obra - Estel",
-        page_icon="🚚",
-        layout="wide"
-    )
-except Exception:
-    pass
+st.set_page_config(
+    page_title="Validador de Retorno de Obra - Estel",
+    page_icon="🚚",
+    layout="wide"
+)
 
 st.markdown("""
 <style>
@@ -73,77 +118,6 @@ div[data-testid="stMetricValue"] { font-size: 26px; font-weight: 700; color: #1E
 </style>
 """, unsafe_allow_html=True)
 
-# ============================================================
-# CONEXAO COM BANCO DE DADOS (COCKROACHDB / POSTGRESQL)
-# ============================================================
-from sqlalchemy import create_engine, Column, Integer, String, Float, Text
-from sqlalchemy.orm import declarative_base, sessionmaker
-
-# --- PATCH: CockroachDB v25+ compatibilidade com psycopg2 ---
-# O psycopg2 nao reconhece a string de versao do CockroachDB v25+
-# (ex: "CockroachDB CCL v25.4.10"). Forcamos retorno de versao PG compativel.
-try:
-    import psycopg2
-    _original_get_parameter_status = psycopg2.extensions.Connection.get_parameter_status
-
-    def _patched_get_parameter_status(self, parameter):
-        if parameter == 'server_version':
-            return '130000'  # Simula PostgreSQL 13.0.0
-        return _original_get_parameter_status(self, parameter)
-
-    psycopg2.extensions.Connection.get_parameter_status = _patched_get_parameter_status
-except Exception:
-    pass  # Se psycopg2 nao estiver disponivel, o erro aparecera depois
-# --- FIM DO PATCH ---
-
-Base = declarative_base()
-DB_AVAILABLE = False
-db_error_msg = ""
-session_db = None
-
-class Usuario(Base):
-    __tablename__ = "usuarios"
-    id = Column(Integer, primary_key=True)
-    nome = Column(String(255), nullable=False)
-    usuario = Column(String(100), unique=True, nullable=False)
-    senha = Column(String(255), nullable=False)
-    face_embedding = Column(Text, nullable=True)
-    email = Column(String(255), nullable=True)
-    cargo = Column(String(100), nullable=True)
-
-class ConferenciaItem(Base):
-    __tablename__ = "conferencia_itens"
-    id = Column(Integer, primary_key=True)
-    operador = Column(String(255), nullable=False)
-    usuario_id = Column(Integer, nullable=True)
-    nome_arquivo = Column(String(500), nullable=False)
-    descricao_produto = Column(String(1000), nullable=False)
-    quantidade_nf = Column(Float, nullable=False)
-    quantidade_conferida = Column(Float, nullable=False)
-    situacao = Column(String(50), nullable=False)
-    observacoes = Column(Text, nullable=True)
-    data_hora = Column(String(20), nullable=False)
-
-def init_db():
-    global DB_AVAILABLE, db_error_msg, session_db
-    try:
-        DATABASE_URL = "postgresql+psycopg2://almox:H31u6KWGzHjnu4EWXOCXrQ@kooky-singer-16481.jxf.gcp-us-east1.cockroachlabs.cloud:26257/defaultdb?sslmode=require"
-        engine = create_engine(
-            DATABASE_URL,
-            pool_pre_ping=True,
-            connect_args={"connect_timeout": 10, "options": "-c statement_timeout=30000"},
-            execution_options={"postgresql_server_version": (13, 0, 0)}
-        )
-        Base.metadata.create_all(engine)
-        Session = sessionmaker(bind=engine)
-        session_db = Session()
-        DB_AVAILABLE = True
-    except Exception as e:
-        db_error_msg = f"Falha: {str(e)[:80]}"
-        DB_AVAILABLE = False
-
-init_db()
-
 # Session State
 if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
@@ -163,7 +137,6 @@ if "item_selecionado_idx" not in st.session_state:
     st.session_state.item_selecionado_idx = None
 if "mostrar_cadastro" not in st.session_state:
     st.session_state.mostrar_cadastro = False
-
 
 # ============================================================
 # ENGENHARIA DE IA FACIAL (DEEPFACE)
@@ -352,7 +325,6 @@ def buscar_itens_inteligente(df, termo_busca):
 # ============================================================
 # EXTRACAO DE DADOS - CORRIGIDO PARA CARREGAR TODOS OS FORMATOS
 # ============================================================
-# Tenta importar PyMuPDF (fitz) primeiro, depois pdfminer como fallback
 FITZ_AVAILABLE = False
 PYPDF_AVAILABLE = False
 PDFMINER_AVAILABLE = False
@@ -384,10 +356,7 @@ except ImportError:
     pass
 
 def extrair_texto_pdf(pdf_bytes):
-    """Extrai texto de PDF usando múltiplas bibliotecas em ordem de prioridade."""
     texto = ""
-
-    # 1. Tenta PyMuPDF (fitz) - mais rápido e confiável
     if FITZ_AVAILABLE:
         try:
             doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -399,7 +368,6 @@ def extrair_texto_pdf(pdf_bytes):
         except Exception:
             texto = ""
 
-    # 2. Tenta pypdf/PyPDF2
     if PYPDF_AVAILABLE:
         try:
             from io import BytesIO
@@ -413,7 +381,6 @@ def extrair_texto_pdf(pdf_bytes):
         except Exception:
             texto = ""
 
-    # 3. Tenta pdfminer.six
     if PDFMINER_AVAILABLE:
         try:
             from io import BytesIO
@@ -459,7 +426,7 @@ def extrair_linhas_danfe(pdf_file):
     registros = []
     try:
         pdf_bytes = pdf_file.read()
-        pdf_file.seek(0)  # Reseta o ponteiro para possível reuso
+        pdf_file.seek(0)
 
         if not FITZ_AVAILABLE:
             st.warning(f"⚠️ PyMuPDF não disponível. Tentando fallback para {pdf_file.name}")
@@ -469,13 +436,10 @@ def extrair_linhas_danfe(pdf_file):
                 return []
             return _extrair_danfe_por_texto(full_text, pdf_file.name)
 
-        # === MÉTODO PRINCIPAL: PyMuPDF com find_tables() ===
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
         for page_num in range(len(doc)):
             page = doc[page_num]
-
-            # Tenta encontrar tabelas na página
             try:
                 tables = page.find_tables()
                 if tables and tables.tables:
@@ -484,9 +448,7 @@ def extrair_linhas_danfe(pdf_file):
                         if not rows:
                             continue
 
-                        # Detecta cabeçalho e índices das colunas
                         header = [str(c).strip().upper() if c else "" for c in rows[0]]
-
                         idx_desc = None
                         idx_qtd = None
 
@@ -497,13 +459,11 @@ def extrair_linhas_danfe(pdf_file):
                             if any(k in h_clean for k in ["QTD", "QUANT", "QTDE", "QUANTIDADE"]):
                                 idx_qtd = i
 
-                        # Se não achou no cabeçalho, tenta inferir pelas linhas
                         if idx_desc is None and len(header) > 1:
-                            idx_desc = 1  # geralmente a segunda coluna
+                            idx_desc = 1
                         if idx_qtd is None and len(header) > 2:
-                            idx_qtd = 2  # geralmente a terceira coluna
+                            idx_qtd = 2
 
-                        # Processa as linhas de dados (pula cabeçalho)
                         for row in rows[1:]:
                             if not row or len(row) < 2:
                                 continue
@@ -511,14 +471,11 @@ def extrair_linhas_danfe(pdf_file):
                             desc = ""
                             qtd = 1.0
 
-                            # Extrai descrição
                             if idx_desc is not None and idx_desc < len(row):
                                 desc = str(row[idx_desc]).strip()
-                                # Limpa códigos numéricos no início
                                 desc = re.sub(r'^\d+\s+', '', desc)
                                 desc = re.sub(r'^\d+', '', desc).strip()
 
-                            # Extrai quantidade
                             if idx_qtd is not None and idx_qtd < len(row):
                                 qtd_str = str(row[idx_qtd]).strip()
                                 qtd_str = qtd_str.replace('.', '').replace(',', '.')
@@ -527,7 +484,6 @@ def extrair_linhas_danfe(pdf_file):
                                 except:
                                     qtd = 1.0
 
-                            # Validação: descrição deve ter mais de 3 caracteres e não ser só números
                             if desc and len(desc) > 3 and not desc.isdigit():
                                 registros.append({
                                     "Arquivo Origem": pdf_file.name,
@@ -539,11 +495,10 @@ def extrair_linhas_danfe(pdf_file):
                                     "Observações": ""
                                 })
 
-                    continue  # Se achou tabelas, pula para próxima página
+                    continue
             except Exception:
                 pass
 
-            # === FALLBACK: extração por texto da página ===
             page_text = page.get_text("text")
             if page_text.strip():
                 page_regs = _extrair_danfe_por_texto(page_text, pdf_file.name)
@@ -551,7 +506,6 @@ def extrair_linhas_danfe(pdf_file):
 
         doc.close()
 
-        # Se não achou nada com tabelas, tenta texto completo
         if not registros:
             full_text = extrair_texto_pdf(pdf_bytes)
             if full_text.strip():
@@ -562,9 +516,7 @@ def extrair_linhas_danfe(pdf_file):
 
     return registros
 
-
 def _extrair_danfe_por_texto(full_text, nome_arquivo):
-    """Extrai produtos do texto do DANFE usando regex (método fallback)."""
     registros = []
     linhas = full_text.split("\n")
     modo_captura = False
@@ -574,37 +526,29 @@ def _extrair_danfe_por_texto(full_text, nome_arquivo):
         if not linha:
             continue
 
-        # Detecta início da tabela de produtos
         if re.search(r'C\.D(\.)?\s*PROD|DESCRI\.O\s*DO(\s*S)?\s*PRODUTO|CÓDIGO\s*PRODUTO|PRODUTO\s*SERVIÇO|DESCRIÇÃO\s*DOS\s*PRODUTOS', linha, re.IGNORECASE):
             modo_captura = True
             continue
 
-        # Detecta fim da tabela
         if re.search(r'C\.LCULO\s*DO\s*ISSQN|DADOS\s*ADICIONAIS|TRANSPORTADOR|INFORMAÇÕES\s*COMPLEMENTARES|CÁLCULO\s*DO\s*IMPOSTO', linha, re.IGNORECASE):
             modo_captura = False
             continue
 
         if modo_captura:
-            # Tenta extrair quantidade e descrição da linha
             numeros = re.findall(r'\b\d+[\d.,]*\b', linha)
-
-            # Remove números do início (código do produto)
             desc = re.sub(r'^\d+\s+', '', linha)
-            # Remove números do final (valores monetários/quantidades)
             desc = re.sub(r'\s*\d+[\d.,]*.*$', '', desc)
             desc = desc.strip()
 
-            # Validação mais flexível
             if len(desc) > 3 and not desc.isdigit():
                 qtd = 1.0
                 try:
                     if numeros:
-                        # Tenta pegar o primeiro número razoável como quantidade
                         for num_str in numeros:
                             num_limpa = num_str.replace('.', '').replace(',', '.')
                             try:
                                 val = float(num_limpa)
-                                if 0 < val < 100000:  # quantidade deve ser positiva e razoável
+                                if 0 < val < 100000:
                                     qtd = val
                                     break
                             except:
@@ -634,12 +578,10 @@ def extrair_linhas_excel(excel_file):
         if df_cru.empty:
             return []
 
-        # Detecta colunas automaticamente
         colunas = [c.upper() for c in df_cru.columns]
         col_desc = None
         col_qtd = None
 
-        # Busca coluna de descrição
         for i, c in enumerate(colunas):
             if any(kw in c for kw in ["DESCRI", "PRODUTO", "ITEM", "NOME", "MATERIAL", "INSUMO"]):
                 col_desc = df_cru.columns[i]
@@ -649,7 +591,6 @@ def extrair_linhas_excel(excel_file):
         elif col_desc is None:
             col_desc = df_cru.columns[0]
 
-        # Busca coluna de quantidade
         for i, c in enumerate(colunas):
             if any(kw in c for kw in ["QTD", "QUANT", "QTDE", "QUANTIDADE", "VOLUME", "TOTAL"]):
                 col_qtd = df_cru.columns[i]
@@ -791,85 +732,53 @@ def render_dashboard(df):
             st.caption("Nenhum item conferido ainda.")
 
 # ============================================================
-# FUNCOES DE LOGIN E CADASTRO
+# FUNÇÕES DE AUTENTICAÇÃO E CADASTRO
 # ============================================================
-def buscar_usuario_por_credenciais(session_db, usuario, senha):
-    """Busca usuario por login e senha. Retorna dict ou None."""
-    try:
-        user = session_db.query(Usuario).filter(Usuario.usuario == usuario).first()
-        if user and user.senha == senha:
-            return {
-                "id": user.id,
-                "nome": user.nome,
-                "usuario": user.usuario,
-                "senha": user.senha,
-                "face_embedding": user.face_embedding,
-                "email": user.email,
-                "cargo": user.cargo
-            }
-        return None
-    except Exception as e:
-        st.error(f"Erro ao consultar usuário: {str(e)[:100]}")
+def buscar_usuario_por_credenciais(matricula, senha):
+    if not DB_AVAILABLE: return None
+    with SessionLocal() as db:
+        usuario = db.query(Usuario).filter(Usuario.matricula == matricula, Usuario.senha == senha).first()
+        if usuario:
+            return {"id": usuario.id, "nome": usuario.nome, "matricula": usuario.matricula, "cargo": usuario.cargo}
         return None
 
-def buscar_usuario_por_biometria(session_db, vetor_atual):
-    """Busca usuario por biometria facial. Retorna (user_dict, score) ou (None, 0)."""
-    try:
-        usuarios = session_db.query(Usuario).all()
-        if not usuarios:
-            return None, 0.0
-
-        melhor_score = 0.0
-        melhor_usuario = None
-
+def buscar_usuario_por_biometria(embedding_capturado, threshold=0.6):
+    if not DB_AVAILABLE: return None
+    with SessionLocal() as db:
+        usuarios = db.query(Usuario).all()
         for usuario in usuarios:
-            face_emb = usuario.face_embedding
-            if not face_emb:
-                continue
-            try:
-                if isinstance(face_emb, str):
-                    vetor_salvo = json.loads(face_emb)
-                else:
-                    vetor_salvo = face_emb
+            if usuario.embedding_facial:
+                try:
+                    emb_bd = np.array(json.loads(usuario.embedding_facial))
+                    dist = np.linalg.norm(emb_bd - embedding_capturado)
+                    if dist < threshold:
+                        return {"id": usuario.id, "nome": usuario.nome, "matricula": usuario.matricula}
+                except Exception:
+                    continue
+    return None
 
-                score = calcular_similaridade(vetor_atual, vetor_salvo)
-                if score > melhor_score:
-                    melhor_score = score
-                    melhor_usuario = {
-                        "id": usuario.id,
-                        "nome": usuario.nome,
-                        "usuario": usuario.usuario,
-                        "senha": usuario.senha,
-                        "face_embedding": usuario.face_embedding,
-                        "email": usuario.email,
-                        "cargo": usuario.cargo
-                    }
-            except Exception:
-                continue
+def inserir_usuario_robusto(nome, matricula, senha, embedding_facial_list, email=None, cargo=None):
+    if not DB_AVAILABLE: return False
+    with SessionLocal() as db:
+        try:
+            embedding_str = json.dumps(embedding_facial_list) if embedding_facial_list else None
+            
+            novo_usuario = Usuario(
+                nome=nome,
+                matricula=matricula,
+                senha=senha,
+                embedding_facial=embedding_str,
+                email=email,
+                cargo=cargo
+            )
+            db.add(novo_usuario)
+            db.commit()
+            return True
+        except Exception as e:
+            db.rollback()
+            st.error(f"Erro ao tentar cadastrar operador: {e}")
+            return False
 
-        return melhor_usuario, melhor_score
-    except Exception as e:
-        st.error(f"Erro na busca biométrica: {str(e)[:100]}")
-        return None, 0.0
-
-def inserir_usuario_robusto(session_db, dados):
-    """Tenta inserir usuario via SQLAlchemy. Retorna (True, user) ou (False, erro)."""
-    try:
-        novo = Usuario(
-            nome=dados.get("nome"),
-            usuario=dados.get("usuario"),
-            senha=dados.get("senha"),
-            face_embedding=dados.get("face_embedding"),
-            email=dados.get("email"),
-            cargo=dados.get("cargo")
-        )
-        session_db.add(novo)
-        session_db.commit()
-        session_db.refresh(novo)
-        return True, novo
-    except Exception as e:
-        session_db.rollback()
-        return False, str(e)
 # ============================================================
 # PAINEL DE AUTENTICACAO (LOGIN + CADASTRO)
 # ============================================================
@@ -882,7 +791,7 @@ if not st.session_state.autenticado:
     """, unsafe_allow_html=True)
 
     if not DB_AVAILABLE:
-        st.warning(f"⚠️ Supabase indisponível: {db_error_msg}")
+        st.warning(f"⚠️ Banco de Dados indisponível.")
         st.info("💡 O sistema funcionará em modo local com login de contingência.")
 
     c_esq, c_centro, c_dir = st.columns([1, 1.4, 1])
@@ -918,12 +827,11 @@ if not st.session_state.autenticado:
                 vetor_atual = processar_biometria(foto_captura)
 
                 if vetor_atual is not None:
-                    if session_db and DB_AVAILABLE:
-                        usuario_encontrado, score = buscar_usuario_por_biometria(session_db, vetor_atual)
+                    if DB_AVAILABLE:
+                        usuario_encontrado = buscar_usuario_por_biometria(vetor_atual)
 
-                        if usuario_encontrado and score > 0.70:
+                        if usuario_encontrado:
                             st.success(f"✅ Bem-vindo, {usuario_encontrado['nome']}!")
-                            st.info(f"📊 Score de confiança: {score:.1%}")
                             st.session_state.autenticado = True
                             st.session_state.usuario_nome = usuario_encontrado["nome"]
                             st.session_state.usuario_id = usuario_encontrado.get("id")
@@ -931,12 +839,10 @@ if not st.session_state.autenticado:
                             safe_rerun()
                         else:
                             st.warning("👤 Rosto não reconhecido na base.")
-                            if score > 0:
-                                st.caption(f"📊 Melhor score: {score:.1%} (mínimo: 70%)")
                             st.info("💡 Use a **Opção 2** (Login com Senha) ou **Opção 3** (Cadastrar-se).")
                             st.session_state.temp_face_vector = vetor_atual
                     else:
-                        st.warning("⚠️ Supabase indisponível. Biometria desativada.")
+                        st.warning("⚠️ Banco de dados indisponível. Biometria desativada.")
                         st.info("💡 Use a **Opção 2** (Login com Senha) ou modo offline.")
                 else:
                     st.error("⚠️ Não foi possível detectar o rosto.")
@@ -966,516 +872,4 @@ if not st.session_state.autenticado:
 
             col_btn1, col_btn2 = st.columns([1, 1])
             with col_btn1:
-                if st.button("🔓 Entrar", type="primary", use_container_width=True):
-                    if login_user and login_pass:
-                        if session_db and DB_AVAILABLE:
-                            user = buscar_usuario_por_credenciais(session_db, login_user, login_pass)
-                            if user:
-                                st.success(f"✅ Bem-vindo, {user['nome']}!")
-                                st.session_state.autenticado = True
-                                st.session_state.usuario_nome = user["nome"]
-                                st.session_state.usuario_id = user.get("id")
-                                time.sleep(1)
-                                safe_rerun()
-                            else:
-                                st.error("❌ Usuário ou senha incorretos.")
-                                st.info("💡 Se não tem cadastro, use a **Opção 3** abaixo.")
-                        else:
-                            if login_user == "admin" and login_pass == "admin":
-                                st.success("✅ Login de contingência realizado!")
-                                st.session_state.autenticado = True
-                                st.session_state.usuario_nome = "Supervisor Local"
-                                time.sleep(1)
-                                safe_rerun()
-                            else:
-                                st.error("❌ Modo offline. Use admin/admin ou cadastre-se no Supabase.")
-                    else:
-                        st.warning("⚠️ Preencha usuário e senha.")
-
-            with col_btn2:
-                if st.button("🆘 Esqueci a Senha", use_container_width=True):
-                    st.info("📧 Entre em contato com o administrador para redefinir sua senha.")
-
-        # ============================================================
-        # DIVISOR 2
-        # ============================================================
-        st.markdown('<div class="divider">OU</div>', unsafe_allow_html=True)
-
-        # ============================================================
-        # ABA 3: CADASTRAR-SE
-        # ============================================================
-        st.markdown("""
-        <div style="background: #FEF3C7; padding: 12px; border-radius: 8px; margin-bottom: 12px; border-left: 4px solid #F59E0B;">
-            <b>📝 Opção 3: Cadastrar-se no Sistema</b><br>
-            <small>Crie sua conta com biometria ou apenas com login/senha</small>
-        </div>
-        """, unsafe_allow_html=True)
-
-        if st.button("📋 Quero me Cadastrar", use_container_width=True):
-            st.session_state.mostrar_cadastro = not st.session_state.mostrar_cadastro
-            safe_rerun()
-
-        if st.session_state.mostrar_cadastro:
-            with st.container():
-                st.markdown('<div class="cadastro-box">', unsafe_allow_html=True)
-
-                st.subheader("📝 Novo Cadastro")
-
-                col_c1, col_c2 = st.columns(2)
-                with col_c1:
-                    cad_nome = st.text_input("Nome Completo:", placeholder="Ex: João Silva", key="cad_nome")
-                    cad_user = st.text_input("Usuário (login):", placeholder="Ex: joao.silva", key="cad_user")
-                with col_c2:
-                    cad_email = st.text_input("E-mail:", placeholder="joao@email.com", key="cad_email")
-                    cad_senha = st.text_input("Senha:", type="password", placeholder="Mínimo 4 caracteres", key="cad_senha")
-
-                cad_cargo = st.selectbox("Cargo:", ["Operador", "Supervisor", "Administrador"], key="cad_cargo")
-
-                st.markdown("---")
-                usar_biometria = st.checkbox("✅ Incluir biometria facial no cadastro (recomendado)", value=True, key="usar_bio")
-
-                vetor_cadastro = None
-                if usar_biometria:
-                    st.info("📸 Tire uma foto do seu rosto para vincular à conta")
-                    foto_cad = st.camera_input("Foto para cadastro:", key="cam_cadastro")
-                    if foto_cad:
-                        with st.spinner("Processando biometria..."):
-                            vetor_cadastro = processar_biometria(foto_cad)
-                            if vetor_cadastro:
-                                st.success("✅ Biometria capturada com sucesso!")
-                            else:
-                                st.warning("⚠️ Não foi possível capturar a biometria. Você pode cadastrar sem ela.")
-
-                if st.button("💾 Salvar Cadastro", type="primary", use_container_width=True):
-                    if cad_nome and cad_user and cad_senha:
-                        if len(cad_senha) < 4:
-                            st.error("❌ A senha deve ter pelo menos 4 caracteres.")
-                        else:
-                            if session_db and DB_AVAILABLE:
-                                try:
-                                    check = session_db.table("usuarios").select("usuario").eq("usuario", cad_user).execute()
-                                    if check.data and len(check.data) > 0:
-                                        st.error(f"❌ O usuário '{cad_user}' já existe. Escolha outro.")
-                                    else:
-                                        dados_insert = {
-                                            "nome": cad_nome,
-                                            "usuario": cad_user,
-                                            "senha": cad_senha
-                                        }
-                                        if cad_email:
-                                            dados_insert["email"] = cad_email
-                                        if cad_cargo:
-                                            dados_insert["cargo"] = cad_cargo
-                                        if vetor_cadastro:
-                                            dados_insert["face_embedding"] = json.dumps(vetor_cadastro)
-
-                                        sucesso, resultado = inserir_usuario_robusto(session_db, dados_insert)
-
-                                        if sucesso:
-                                            st.success("🎉 Cadastro realizado com sucesso!")
-                                            st.info("✅ Agora você pode fazer login com seu usuário e senha.")
-                                            st.session_state.mostrar_cadastro = False
-                                            time.sleep(2)
-                                            safe_rerun()
-                                        else:
-                                            st.error(f"❌ Erro ao cadastrar: {resultado}")
-                                            st.info("💡 Tente novamente ou use o modo offline (admin/admin).")
-                                except Exception as e:
-                                    st.error(f"❌ Erro: {e}")
-                            else:
-                                st.error("❌ Supabase indisponível. Não é possível cadastrar no momento.")
-                                st.info("💡 Use o login de contingência: admin / admin")
-                    else:
-                        st.error("❌ Preencha Nome, Usuário e Senha.")
-
-                st.markdown('</div>', unsafe_allow_html=True)
-
-        if not DB_AVAILABLE:
-            st.markdown("---")
-            st.caption("🟡 Sistema em modo offline. Login de contingência: **admin / admin**")
-
-# ============================================================
-# PAINEL PRINCIPAL
-# ============================================================
-else:
-    cab_esquerdo, cab_direito = st.columns([4, 1])
-    cab_esquerdo.markdown(f"<h1>🚚 Validador de Retornos de Obra</h1>", unsafe_allow_html=True)
-    cab_esquerdo.caption(f"Operador: **{st.session_state.usuario_nome}** | {'🟢 Online' if DB_AVAILABLE else '🟡 Offline'}")
-
-    if cab_direito.button("🚪 Sair", key="logout"):
-        st.session_state.autenticado = False
-        st.session_state.dados_conferencia = pd.DataFrame()
-        st.session_state.fotos_postadas = {}
-        st.session_state.item_selecionado_idx = None
-        st.session_state.mostrar_cadastro = False
-        safe_rerun()
-
-    st.markdown("---")
-
-    # SIDEBAR
-    with st.sidebar:
-        st.header("📥 Carregar Documentos")
-
-        # Info sobre bibliotecas disponíveis
-        libs_status = []
-        if FITZ_AVAILABLE:
-            libs_status.append("✅ PyMuPDF")
-        if PYPDF_AVAILABLE:
-            libs_status.append("✅ PyPDF")
-        if PDFMINER_AVAILABLE:
-            libs_status.append("✅ PDFMiner")
-        if not libs_status:
-            libs_status.append("⚠️ Nenhuma lib PDF detectada")
-
-        st.caption(" | ".join(libs_status))
-
-        arquivos_entrada = st.file_uploader(
-            "Arraste DANFEs (PDF) ou planilhas:",
-            type=["pdf", "xlsx", "xls", "csv"],
-            accept_multiple_files=True
-        )
-
-        if arquivos_entrada:
-            if st.button("⚡ Processar Carga em Lote", type="primary"):
-                all_records = []
-                arquivos_processados = 0
-                arquivos_com_erro = []
-
-                with st.spinner("Lendo documentos..."):
-                    for arq in arquivos_entrada:
-                        try:
-                            if arq.name.lower().endswith(".pdf"):
-                                regs = extrair_linhas_danfe(arq)
-                                if regs:
-                                    all_records.extend(regs)
-                                    arquivos_processados += 1
-                                else:
-                                    arquivos_com_erro.append(f"{arq.name} (sem dados extraídos)")
-                            else:
-                                regs = extrair_linhas_excel(arq)
-                                if regs:
-                                    all_records.extend(regs)
-                                    arquivos_processados += 1
-                                else:
-                                    arquivos_com_erro.append(f"{arq.name} (sem dados extraídos)")
-                        except Exception as e:
-                            arquivos_com_erro.append(f"{arq.name} ({str(e)[:50]})")
-
-                    if all_records:
-                        with st.spinner("Consolidando dados..."):
-                            registros_consolidados = consolidar_registros(all_records)
-                            df_novo = pd.DataFrame(registros_consolidados)
-                            total_original = len(all_records)
-                            total_consolidado = len(df_novo)
-                            itens_removidos = total_original - total_consolidado
-                            st.session_state.dados_conferencia = df_novo
-
-                            st.success(f"📊 {total_consolidado} itens carregados de {arquivos_processados} arquivo(s)!")
-                            if itens_removidos > 0:
-                                st.info(f"{total_original} brutos → {itens_removidos} consolidados → {total_consolidado} únicos")
-
-                            if arquivos_com_erro:
-                                st.warning(f"⚠️ {len(arquivos_com_erro)} arquivo(s) não retornaram dados:")
-                                for err in arquivos_com_erro[:3]:
-                                    st.caption(f"- {err}")
-
-                            divergencias = [r for r in registros_consolidados if "divergentes" in r.get("Observações", "")]
-                            if divergencias:
-                                st.warning(f"⚠️ {len(divergencias)} item(s) com quantidades divergentes foram SOMADOS.")
-                        safe_rerun()
-                    else:
-                        st.error("❌ Nenhum item foi extraído dos documentos.")
-                        st.info("💡 Verifique se os PDFs são DANFEs ou se as planilhas têm colunas de descrição e quantidade.")
-
-        # ============================================================
-        # EXPORTAÇÃO EM EXCEL - CORRIGIDA E MELHORADA
-        # ============================================================
-        if not st.session_state.dados_conferencia.empty:
-            st.markdown("---")
-            st.header("📤 Exportar Relatório")
-
-            try:
-                memoria_excel = io.BytesIO()
-                with pd.ExcelWriter(memoria_excel, engine='openpyxl') as writer:
-                    # Aba principal com todos os dados
-                    st.session_state.dados_conferencia.to_excel(
-                        writer, 
-                        index=False, 
-                        sheet_name="Consolidado"
-                    )
-
-                    # Aba de resumo
-                    df = st.session_state.dados_conferencia
-                    resumo_data = {
-                        'Métrica': [
-                            'Total de Itens',
-                            'Conformes',
-                            'Divergentes', 
-                            'Pendentes',
-                            'Com Foto',
-                            'Operador',
-                            'Data/Hora'
-                        ],
-                        'Valor': [
-                            len(df),
-                            len(df[df["Situação"] == "Conforme"]),
-                            len(df[df["Situação"] == "Divergente"]),
-                            len(df[df["Situação"] == "Pendente"]),
-                            len(df[df["Foto Capturada"] == "Sim"]),
-                            st.session_state.usuario_nome,
-                            time.strftime("%Y-%m-%d %H:%M:%S")
-                        ]
-                    }
-                    pd.DataFrame(resumo_data).to_excel(
-                        writer,
-                        index=False,
-                        sheet_name="Resumo"
-                    )
-
-                st.download_button(
-                    label="💾 Exportar Excel (.xlsx)",
-                    data=memoria_excel.getvalue(),
-                    file_name=f"Relatorio_Estel_{time.strftime('%Y%m%d_%H%M%S')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
-            except Exception as e:
-                st.error(f"❌ Erro ao gerar Excel: {str(e)[:100]}")
-                st.info("💡 Tente instalar: pip install openpyxl")
-
-            if st.button("🗑️ Limpar Tudo", use_container_width=True):
-                st.session_state.dados_conferencia = pd.DataFrame()
-                st.session_state.fotos_postadas = {}
-                st.session_state.item_selecionado_idx = None
-                safe_rerun()
-
-    # CONTEÚDO PRINCIPAL
-    if st.session_state.dados_conferencia.empty:
-        st.info("💡 **Dica:** Carregue notas fiscais no menu à esquerda para iniciar.")
-    else:
-        aba_triagem, aba_tabela, aba_dashboard = st.tabs([
-            "📸 Posto de Triagem",
-            "📋 Lista Consolidada",
-            "📊 Dashboard"
-        ])
-
-        # ============================================================
-        # ABA TRIAGEM
-        # ============================================================
-        with aba_triagem:
-            df_ref = st.session_state.dados_conferencia
-
-            st.markdown("""
-            <div class="busca-container">
-                <b>🔍 Busca Inteligente de Insumos</b><br>
-                <small>Digite parte do nome, código ou descrição. A busca é <b>dinâmica</b> e procura em todos os campos.</small>
-            </div>
-            """, unsafe_allow_html=True)
-
-            termo_busca = st.text_input(
-                "Buscar produto:",
-                value=st.session_state.get("busca_termo", ""),
-                placeholder="Ex: chave combinada, cimento, parafuso...",
-                key="busca_produto"
-            ).strip()
-
-            if termo_busca != st.session_state.get("busca_termo", ""):
-                st.session_state.busca_termo = termo_busca
-                st.session_state.item_selecionado_idx = None
-                safe_rerun()
-
-            df_resultado, indices_resultado = buscar_itens_inteligente(df_ref, termo_busca)
-
-            arquivos_unicos = df_ref['Arquivo Origem'].unique()
-            if len(arquivos_unicos) > 1:
-                arquivo_filtro = st.selectbox(
-                    "📁 Filtrar por Arquivo/NF:",
-                    ["Todos os arquivos"] + list(arquivos_unicos),
-                    key="filtro_arquivo"
-                )
-                if arquivo_filtro != "Todos os arquivos":
-                    df_resultado = df_resultado[df_resultado['Arquivo Origem'].str.contains(arquivo_filtro, na=False)]
-
-            if termo_busca and len(termo_busca) >= 2:
-                if not df_resultado.empty:
-                    st.markdown(f"""
-                    <div class="busca-resultado">
-                        ✅ <b>{len(df_resultado)} resultado(s)</b> para "{termo_busca}"
-                    </div>
-                    """, unsafe_allow_html=True)
-                else:
-                    st.markdown(f"""
-                    <div class="busca-vazio">
-                        ⚠️ Nenhum resultado exato para "{termo_busca}". Mostrando todos os itens:
-                    </div>
-                    """, unsafe_allow_html=True)
-                    df_resultado = df_ref.copy()
-            elif termo_busca and len(termo_busca) < 2:
-                st.info("💡 Digite pelo menos 2 caracteres para buscar.")
-                df_resultado = df_ref.copy()
-            else:
-                df_resultado = df_ref.copy()
-
-            opcoes_resultado = [
-                f"[{row['Situação']}] [{row['Arquivo Origem'][:25]}] - {row['Descrição do Produto'][:60]}"
-                for _, row in df_resultado.iterrows()
-            ]
-
-            if opcoes_resultado:
-                idx_selecionado = st.selectbox(
-                    "Selecione o insumo para conferência:",
-                    range(len(opcoes_resultado)),
-                    format_func=lambda i: opcoes_resultado[i],
-                    key="select_item"
-                )
-
-                if indices_resultado:
-                    idx_real = indices_resultado[idx_selecionado]
-                else:
-                    idx_real = df_resultado.index[idx_selecionado]
-
-                st.session_state.item_selecionado_idx = idx_real
-
-                linha = df_ref.loc[idx_real]
-
-                status_class = {
-                    "Pendente": "status-pendente",
-                    "Conforme": "status-conforme",
-                    "Divergente": "status-divergente"
-                }.get(linha['Situação'], "status-pendente")
-
-                st.markdown(f"""
-                <div class='card-conferencia'>
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                        <span style='color:#64748B; font-size:13px;'>📄 {linha['Arquivo Origem']}</span>
-                        <span class="status-badge {status_class}">{linha['Situação']}</span>
-                    </div>
-                    <h3 style='color:#0284C7; margin:0; font-size:18px;'>{linha['Descrição do Produto']}</h3>
-                    <div style="display:flex; gap:24px; margin-top:12px;">
-                        <div>
-                            <div style="font-size:11px; color:#64748B; text-transform:uppercase;">Qtd NF</div>
-                            <div style="font-size:20px; font-weight:700; color:#1E293B;">{linha['Quantidade NF']}</div>
-                        </div>
-                        <div>
-                            <div style="font-size:11px; color:#64748B; text-transform:uppercase;">Conferida</div>
-                            <div style="font-size:20px; font-weight:700; color:#0284C7;">{linha['Quantidade Conferida']}</div>
-                        </div>
-                        <div>
-                            <div style="font-size:11px; color:#64748B; text-transform:uppercase;">Foto</div>
-                            <div style="font-size:20px; font-weight:700; color:#{'22C55E' if linha['Foto Capturada'] == 'Sim' else 'EF4444'};">
-                                {'✅' if linha['Foto Capturada'] == 'Sim' else '❌'}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-
-                col_cam, col_form = st.columns(2)
-                with col_cam:
-                    foto_mat = st.camera_input(
-                        "📸 Foto do Material:",
-                        key=f"cam_{idx_real}"
-                    )
-                    if foto_mat:
-                        st.session_state.fotos_postadas[idx_real] = foto_mat.getvalue()
-                        st.session_state.dados_conferencia.at[idx_real, "Foto Capturada"] = "Sim"
-                        st.toast("📸 Foto armazenada!")
-                        safe_rerun()
-
-                    if idx_real in st.session_state.fotos_postadas:
-                        st.image(
-                            st.session_state.fotos_postadas[idx_real],
-                            caption="Foto atual",
-                            width=300
-                        )
-
-                with col_form:
-                    qtd_conf = st.number_input(
-                        "Quantidade real descarregada:",
-                        min_value=0.0,
-                        value=float(linha['Quantidade NF']),
-                        step=0.1,
-                        key=f"qtd_{idx_real}"
-                    )
-                    obs = st.text_area(
-                        "Notas / Divergências:",
-                        value=linha['Observações'],
-                        key=f"obs_{idx_real}"
-                    )
-
-                    col_btn1, col_btn2 = st.columns(2)
-                    with col_btn1:
-                        if st.button("✅ Confirmar Conforme", type="primary", key=f"conf_ok_{idx_real}"):
-                            st.session_state.dados_conferencia.at[idx_real, "Quantidade Conferida"] = linha['Quantidade NF']
-                            st.session_state.dados_conferencia.at[idx_real, "Observações"] = obs
-                            st.session_state.dados_conferencia.at[idx_real, "Situação"] = "Conforme"
-                            st.toast("✅ Item confirmado como Conforme!")
-                            safe_rerun()
-
-                    with col_btn2:
-                        if st.button("⚠️ Registrar Divergência", key=f"conf_div_{idx_real}"):
-                            st.session_state.dados_conferencia.at[idx_real, "Quantidade Conferida"] = qtd_conf
-                            st.session_state.dados_conferencia.at[idx_real, "Observações"] = obs
-                            st.session_state.dados_conferencia.at[idx_real, "Situação"] = "Divergente"
-                            st.toast("⚠️ Divergência registrada!")
-                            safe_rerun()
-
-                    if st.button("💾 Gravar no Banco", key=f"save_{idx_real}"):
-                        st.session_state.dados_conferencia.at[idx_real, "Quantidade Conferida"] = qtd_conf
-                        st.session_state.dados_conferencia.at[idx_real, "Observações"] = obs
-                        situacao_final = "Conforme" if qtd_conf == linha['Quantidade NF'] else "Divergente"
-                        st.session_state.dados_conferencia.at[idx_real, "Situação"] = situacao_final
-
-                        if session_db and DB_AVAILABLE:
-                            try:
-                                novo_item = ConferenciaItem(
-                                    operador=st.session_state.usuario_nome,
-                                    usuario_id=st.session_state.usuario_id,
-                                    nome_arquivo=linha['Arquivo Origem'],
-                                    descricao_produto=linha['Descrição do Produto'],
-                                    quantidade_nf=float(linha['Quantidade NF']),
-                                    quantidade_conferida=float(qtd_conf),
-                                    situacao=situacao_final,
-                                    observacoes=obs,
-                                    data_hora=time.strftime("%Y-%m-%d %H:%M:%S")
-                                )
-                                session_db.add(novo_item)
-                                session_db.commit()
-                                st.toast("💾 Dados gravados no CockroachDB!")
-                            except Exception as e:
-                                session_db.rollback()
-                                st.error(f"Erro ao sincronizar: {e}")
-                        safe_rerun()
-            else:
-                st.warning("Nenhum item disponível para seleção.")
-
-        # ============================================================
-        # ABA TABELA
-        # ============================================================
-        with aba_tabela:
-            df = st.session_state.dados_conferencia
-
-            col_f1, col_f2, col_f3 = st.columns(3)
-            with col_f1:
-                filtro_status = st.multiselect("Filtrar por Status:", ["Pendente", "Conforme", "Divergente"], default=[])
-            with col_f2:
-                filtro_arquivo = st.multiselect("Filtrar por Arquivo:", df['Arquivo Origem'].unique(), default=[])
-            with col_f3:
-                filtro_foto = st.selectbox("Com Foto:", ["Todos", "Sim", "Não"])
-
-            df_filtrado = df.copy()
-            if filtro_status:
-                df_filtrado = df_filtrado[df_filtrado["Situação"].isin(filtro_status)]
-            if filtro_arquivo:
-                df_filtrado = df_filtrado[df_filtrado["Arquivo Origem"].isin(filtro_arquivo)]
-            if filtro_foto != "Todos":
-                df_filtrado = df_filtrado[df_filtrado["Foto Capturada"] == filtro_foto]
-
-            st.dataframe(df_filtrado, use_container_width=True, height=500)
-            st.caption(f"Mostrando {len(df_filtrado)} de {len(df)} itens")
-
-        # ============================================================
-        # ABA DASHBOARD
-        # ============================================================
-        with aba_dashboard:
-            render_dashboard(st.session_state.dados_conferencia)
+                if st.button("🔓 Entrar", type="primary",
