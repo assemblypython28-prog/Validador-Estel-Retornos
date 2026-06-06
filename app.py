@@ -20,7 +20,7 @@ from PIL import Image
 # ============================================================
 # BLOCO 1: SQLALCHEMY + COCKROACHDB (SUBSTITUI SUPABASE)
 # ============================================================
-from sqlalchemy import create_engine, Column, Integer, String, Float, Text, DateTime, text
+from sqlalchemy import create_engine, Column, Integer, String, Float, Text, DateTime, text, LargeBinary
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.dialects.postgresql import UUID
 from datetime import datetime
@@ -55,6 +55,7 @@ class ConferenciaItem(Base):
     observacoes = Column(Text)
     data_hora = Column(String(20))
     obra_parada = Column(String(255))
+    foto_blob = Column(LargeBinary)
 
 def init_db():
     global DB_AVAILABLE, db_error_msg, engine, SessionLocal
@@ -78,6 +79,97 @@ def get_db_session():
     if SessionLocal:
         return SessionLocal()
     return None
+
+def carregar_dados_sessao():
+    """Carrega itens e fotos do banco para o session_state (persistencia entre sessoes)."""
+    session = get_db_session()
+    if not session or not DB_AVAILABLE:
+        return
+    try:
+        obra = st.session_state.get("obra_parada", "")
+        # Carrega itens da obra atual (ou todos se obra vazia)
+        if obra:
+            itens = session.query(ConferenciaItem).filter(
+                ConferenciaItem.obra_parada == obra
+            ).all()
+        else:
+            itens = session.query(ConferenciaItem).filter(
+                ConferenciaItem.operador == st.session_state.get("usuario_nome", "")
+            ).order_by(ConferenciaItem.id.desc()).limit(500).all()
+
+        if not itens:
+            return
+
+        registros = []
+        fotos = {}
+        for idx, item in enumerate(itens):
+            registros.append({
+                "Arquivo Origem": item.nome_arquivo or "",
+                "Descricao do Produto": item.descricao_produto or "",
+                "Quantidade NF": float(item.quantidade_nf or 0),
+                "Quantidade Conferida": float(item.quantidade_conferida or 0),
+                "Situacao": item.situacao or "Pendente",
+                "Foto Capturada": "Sim" if item.foto_blob else "Nao",
+                "Observacoes": item.observacoes or "",
+                "_db_id": item.id  # referencia interna
+            })
+            if item.foto_blob:
+                fotos[idx] = item.foto_blob
+
+        if registros:
+            st.session_state.dados_conferencia = pd.DataFrame(registros)
+            st.session_state.fotos_postadas = fotos
+    except Exception as e:
+        st.error(f"Erro ao carregar dados persistidos: {str(e)[:100]}")
+    finally:
+        session.close()
+
+
+def salvar_item_completo(idx_real, linha, qtd_conf, obs_final, situacao_final, foto_bytes=None):
+    """Upsert de item no banco (insert ou update)."""
+    session = get_db_session()
+    if not session or not DB_AVAILABLE:
+        return False
+    try:
+        obra = st.session_state.get("obra_parada", "")
+        # Tenta encontrar item existente pela descricao + obra
+        existente = session.query(ConferenciaItem).filter(
+            ConferenciaItem.descricao_produto == linha.get("Descricao do Produto", ""),
+            ConferenciaItem.obra_parada == obra,
+            ConferenciaItem.operador == st.session_state.usuario_nome
+        ).first()
+
+        if existente:
+            existente.quantidade_conferida = float(qtd_conf)
+            existente.situacao = situacao_final
+            existente.observacoes = obs_final
+            existente.data_hora = time.strftime("%Y-%m-%d %H:%M:%S")
+            if foto_bytes:
+                existente.foto_blob = foto_bytes
+        else:
+            novo = ConferenciaItem(
+                operador=st.session_state.usuario_nome,
+                usuario_id=st.session_state.usuario_id,
+                nome_arquivo=linha.get("Arquivo Origem", ""),
+                descricao_produto=linha.get("Descricao do Produto", ""),
+                quantidade_nf=float(linha.get("Quantidade NF", 0)),
+                quantidade_conferida=float(qtd_conf),
+                situacao=situacao_final,
+                observacoes=obs_final,
+                data_hora=time.strftime("%Y-%m-%d %H:%M:%S"),
+                obra_parada=obra,
+                foto_blob=foto_bytes
+            )
+            session.add(novo)
+        session.commit()
+        return True
+    except Exception as e:
+        session.rollback()
+        st.error(f"Erro ao sincronizar: {e}")
+        return False
+    finally:
+        session.close()
+
 
 # ============================================================
 # CONFIGURACAO PERSISTENTE OBRA/PARADA
@@ -183,6 +275,10 @@ if "mostrar_cadastro" not in st.session_state:
 if "obra_parada" not in st.session_state:
     cfg = carregar_config()
     st.session_state.obra_parada = cfg.get("obra_parada", "")
+
+# Carrega dados persistidos do banco se autenticado e banco disponivel
+if st.session_state.get("autenticado") and DB_AVAILABLE and st.session_state.dados_conferencia.empty:
+    carregar_dados_sessao()
 
 # ============================================================
 # ENGENHARIA DE IA FACIAL (DEEPFACE)
@@ -1234,9 +1330,23 @@ else:
             # -------------------------------------------------------
 
             try:
+                import zipfile
+
+                # Prepara Excel em memoria
                 memoria_excel = io.BytesIO()
                 with pd.ExcelWriter(memoria_excel, engine='openpyxl') as writer:
-                    df_export.to_excel(writer, index=False, sheet_name="Consolidado")
+                    # Adiciona coluna com nome do arquivo de foto para referencia
+                    df_exp_foto = df_export.copy()
+                    foto_refs = []
+                    for idx, row in df_exp_foto.iterrows():
+                        foto_idx = row.get("_db_id", idx) if "_db_id" in row else idx
+                        tem_foto = foto_idx in st.session_state.fotos_postadas
+                        if tem_foto:
+                            foto_refs.append(f"fotos/item_{idx+1:04d}.jpg")
+                        else:
+                            foto_refs.append("")
+                    df_exp_foto["Arquivo Foto"] = foto_refs
+                    df_exp_foto.to_excel(writer, index=False, sheet_name="Consolidado")
 
                     resumo_data = {
                         'Metrica': [
@@ -1262,11 +1372,24 @@ else:
                     }
                     pd.DataFrame(resumo_data).to_excel(writer, index=False, sheet_name="Resumo")
 
+                # Monta ZIP com Excel + fotos
+                memoria_zip = io.BytesIO()
+                with zipfile.ZipFile(memoria_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
+                    zf.writestr(
+                        f"Relatorio_Estel_{time.strftime('%Y%m%d_%H%M%S')}.xlsx",
+                        memoria_excel.getvalue()
+                    )
+                    for idx, row in df_export.iterrows():
+                        foto_idx = row.get("_db_id", idx) if "_db_id" in row else idx
+                        if foto_idx in st.session_state.fotos_postadas:
+                            nome_foto = f"fotos/item_{idx+1:04d}.jpg"
+                            zf.writestr(nome_foto, st.session_state.fotos_postadas[foto_idx])
+
                 st.download_button(
-                    label="💾 Exportar Excel (.xlsx)",
-                    data=memoria_excel.getvalue(),
-                    file_name=f"Relatorio_Estel_{time.strftime('%Y%m%d_%H%M%S')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    label="💾 Exportar Excel + Fotos (.zip)",
+                    data=memoria_zip.getvalue(),
+                    file_name=f"Relatorio_Estel_{time.strftime('%Y%m%d_%H%M%S')}.zip",
+                    mime="application/zip",
                     use_container_width=True
                 )
             except Exception as e:
@@ -1345,7 +1468,7 @@ else:
                     ))
                     elements.append(Spacer(1, 12))
 
-                    # Tabela de dados
+                    # Tabela de dados (com coluna Foto como texto + imagem inline se couber)
                     headers = ["#", "Descricao do Produto", "Qtd NF", "Conferida", "Situacao", "Foto", "Observacoes"]
                     data = [headers]
 
@@ -1360,13 +1483,19 @@ else:
                             "Avaria": "#991B1B"
                         }.get(situacao, "#1E293B")
 
+                        # Verifica se ha foto em memoria
+                        foto_idx = row.get("_db_id", idx) if "_db_id" in row else idx
+                        tem_foto_mem = foto_idx in st.session_state.fotos_postadas
+                        tem_foto_db = row.get("Foto Capturada", "Nao") == "Sim"
+                        tem_foto = tem_foto_mem or tem_foto_db
+
                         data.append([
                             str(idx + 1),
                             Paragraph(str(row.get("Descricao do Produto", ""))[:80], cell_style),
                             str(row.get("Quantidade NF", "")),
                             str(row.get("Quantidade Conferida", "")),
                             Paragraph(f'<font color="{situacao_color}"><b>{situacao}</b></font>', cell_center_style),
-                            str(row.get("Foto Capturada", "Nao")),
+                            "📸 Sim" if tem_foto else "❌ Nao",
                             Paragraph(str(row.get("Observacoes", ""))[:100], cell_style)
                         ])
 
@@ -1649,30 +1778,13 @@ else:
                             situacao_final = "Conforme" if qtd_conf == linha['Quantidade NF'] else "Divergente"
                             st.session_state.dados_conferencia.at[idx_real, "Situacao"] = situacao_final
 
-                            # ---- BLOCO 3: INSERT VIA SQLALCHEMY ----
-                            session = get_db_session()
-                            if session and DB_AVAILABLE:
-                                try:
-                                    novo_item = ConferenciaItem(
-                                        operador=st.session_state.usuario_nome,
-                                        usuario_id=st.session_state.usuario_id,
-                                        nome_arquivo=linha['Arquivo Origem'],
-                                        descricao_produto=linha['Descricao do Produto'],
-                                        quantidade_nf=float(linha['Quantidade NF']),
-                                        quantidade_conferida=float(qtd_conf),
-                                        situacao=situacao_final,
-                                        observacoes=obs_final,
-                                        data_hora=time.strftime("%Y-%m-%d %H:%M:%S"),
-                                        obra_parada=st.session_state.get("obra_parada", "")
-                                    )
-                                    session.add(novo_item)
-                                    session.commit()
-                                    st.toast("💾 Dados gravados no CockroachDB!")
-                                except Exception as e:
-                                    session.rollback()
-                                    st.error(f"Erro ao sincronizar: {e}")
-                                finally:
-                                    session.close()
+                            # ---- BLOCO 3: INSERT/UPDATE VIA SQLALCHEMY COM FOTO ----
+                            foto_bytes = st.session_state.fotos_postadas.get(idx_real)
+                            ok = salvar_item_completo(
+                                idx_real, linha, qtd_conf, obs_final, situacao_final, foto_bytes
+                            )
+                            if ok:
+                                st.toast("💾 Dados gravados no CockroachDB!")
                             safe_rerun()
                     # ---------------------------------------------------------------
             else:
