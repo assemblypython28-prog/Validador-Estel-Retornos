@@ -1385,6 +1385,34 @@ else:
                         st.error("❌ Nenhum item foi extraido dos documentos.")
                         st.info("💡 Verifique se os PDFs sao DANFEs ou se as planilhas tem colunas de descricao e quantidade.")
 
+        # ---- SALVAR CARGA NO BANCO (persistencia) ----
+        if not st.session_state.dados_conferencia.empty and DB_AVAILABLE:
+            st.markdown("---")
+            if st.button("💾 Salvar carga no banco", type="secondary", use_container_width=True):
+                df_carga = st.session_state.dados_conferencia.copy()
+                obra = st.session_state.get("obra_parada", "")
+                salvos = 0
+                erros = 0
+                with st.spinner("Sincronizando itens com o banco..."):
+                    for idx, row in df_carga.iterrows():
+                        foto_bytes = st.session_state.fotos_postadas.get(idx)
+                        ok = salvar_item_completo(
+                            idx, row,
+                            float(row.get("Quantidade Conferida", 0)),
+                            row.get("Observacoes", ""),
+                            row.get("Situacao", "Pendente"),
+                            foto_bytes
+                        )
+                        if ok:
+                            salvos += 1
+                        else:
+                            erros += 1
+                st.success(f"✅ {salvos} item(s) persistido(s) no banco!")
+                if erros > 0:
+                    st.warning(f"⚠️ {erros} item(s) com erro.")
+                st.toast("💾 Carga salva no CockroachDB!")
+        # -----------------------------------------------
+
         # ============================================================
         # EXPORTACAO EM EXCEL + PDF PROFISSIONAL
         # ============================================================
@@ -1666,6 +1694,7 @@ else:
             </div>
             """, unsafe_allow_html=True)
 
+            # Busca em tempo real — SEM safe_rerun() forçado
             termo_busca = st.text_input(
                 "Buscar produto:",
                 value=st.session_state.get("busca_termo", ""),
@@ -1673,10 +1702,10 @@ else:
                 key="busca_produto"
             ).strip()
 
+            # Sincroniza session_state sem forçar rerun
             if termo_busca != st.session_state.get("busca_termo", ""):
                 st.session_state.busca_termo = termo_busca
                 st.session_state.item_selecionado_idx = None
-                safe_rerun()
 
             df_resultado, indices_resultado = buscar_itens_inteligente(df_ref, termo_busca)
 
@@ -1704,13 +1733,16 @@ else:
                     </div>
                     """, unsafe_allow_html=True)
                     df_resultado = df_ref.copy()
+                    indices_resultado = []
             elif termo_busca and len(termo_busca) < 2:
                 st.info("💡 Digite pelo menos 2 caracteres para buscar.")
                 df_resultado = df_ref.copy()
+                indices_resultado = []
             else:
                 df_resultado = df_ref.copy()
+                indices_resultado = []
 
-            # ---- FORMATACAO LIMPA DO SELECTBOX ----
+            # ---- FORMATACAO LIMPA DO SELECTBOX COM KEY DINAMICA ----
             opcoes_resultado = []
             for _, row in df_resultado.iterrows():
                 sit = row.get('Situacao', 'Pendente')
@@ -1720,11 +1752,13 @@ else:
                 opcoes_resultado.append(f"{sit:.<12} {arq:.<22} {desc} (Qtd: {qtd})")
 
             if opcoes_resultado:
+                # Key dinamica: muda quando a busca muda, forçando reset do selectbox
+                busca_key = re.sub(r'[^a-zA-Z0-9]', '_', termo_busca)[:30] if termo_busca else "todos"
                 idx_selecionado = st.selectbox(
                     "Selecione o insumo para conferencia:",
                     range(len(opcoes_resultado)),
                     format_func=lambda i: opcoes_resultado[i],
-                    key="select_item"
+                    key=f"select_item_{busca_key}"
                 )
 
                 if indices_resultado:
