@@ -813,20 +813,26 @@ def render_dashboard(df):
     conformes = len(df[df["Situacao"] == "Conforme"])
     divergentes = len(df[df["Situacao"] == "Divergente"])
     pendentes = len(df[df["Situacao"] == "Pendente"])
+    aprovados = len(df[df["Situacao"] == "Aprovado"])
+    reparos = len(df[df["Situacao"] == "Reparo"])
+    avarias = len(df[df["Situacao"] == "Avaria"])
     com_foto = len(df[df["Foto Capturada"] == "Sim"])
 
     pct_conforme = (conformes / total * 100) if total > 0 else 0
     pct_divergente = (divergentes / total * 100) if total > 0 else 0
     pct_pendente = (pendentes / total * 100) if total > 0 else 0
+    pct_aprovado = (aprovados / total * 100) if total > 0 else 0
+    pct_reparo = (reparos / total * 100) if total > 0 else 0
+    pct_avaria = (avarias / total * 100) if total > 0 else 0
 
     st.markdown("### 📊 Painel de Controle em Tempo Real")
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
     with col1:
         st.markdown(f"""
         <div class="dashboard-card" style="border-top: 4px solid #0284C7;">
             <div class="dashboard-metric">{total}</div>
-            <div class="dashboard-label">Total de Itens</div>
+            <div class="dashboard-label">Total</div>
         </div>
         """, unsafe_allow_html=True)
     with col2:
@@ -859,6 +865,60 @@ def render_dashboard(df):
             <div style="margin-top:8px;">
                 <div class="progress-bar"><div class="progress-fill" style="width:{pct_pendente}%; background:#F59E0B;"></div></div>
                 <small style="color:#64748B;">{pct_pendente:.1f}%</small>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col5:
+        st.markdown(f"""
+        <div class="dashboard-card" style="border-top: 4px solid #166534;">
+            <div class="dashboard-metric" style="color: #166534;">{aprovados}</div>
+            <div class="dashboard-label">Aprovados</div>
+            <div style="margin-top:8px;">
+                <div class="progress-bar"><div class="progress-fill" style="width:{pct_aprovado}%; background:#166534;"></div></div>
+                <small style="color:#64748B;">{pct_aprovado:.1f}%</small>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col6:
+        st.markdown(f"""
+        <div class="dashboard-card" style="border-top: 4px solid #92400E;">
+            <div class="dashboard-metric" style="color: #92400E;">{reparos}</div>
+            <div class="dashboard-label">Reparos</div>
+            <div style="margin-top:8px;">
+                <div class="progress-bar"><div class="progress-fill" style="width:{pct_reparo}%; background:#92400E;"></div></div>
+                <small style="color:#64748B;">{pct_reparo:.1f}%</small>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Linha extra para Avaria
+    col_avaria, col_foto = st.columns(2)
+    with col_avaria:
+        st.markdown(f"""
+        <div class="dashboard-card" style="border-top: 4px solid #991B1B;">
+            <div class="dashboard-metric" style="color: #991B1B;">{avarias}</div>
+            <div class="dashboard-label">Avarias</div>
+            <div style="margin-top:8px;">
+                <div class="progress-bar"><div class="progress-fill" style="width:{pct_avaria}%; background:#991B1B;"></div></div>
+                <small style="color:#64748B;">{pct_avaria:.1f}%</small>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col_foto:
+        st.markdown(f"""
+        <div class="dashboard-card" style="border-top: 4px solid #0284C7;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                    <div class="dashboard-metric" style="font-size:24px;">{com_foto}/{total}</div>
+                    <div class="dashboard-label">Itens com Foto</div>
+                </div>
+                <div style="text-align:right;">
+                    <div style="font-size:28px; font-weight:700; color:#0284C7;">{(com_foto/total*100):.0f}%</div>
+                    <div style="font-size:12px; color:#64748B;">Cobertura</div>
+                </div>
+            </div>
+            <div class="progress-bar" style="margin-top:12px;">
+                <div class="progress-fill" style="width:{(com_foto/total*100)}%; background:#0284C7;"></div>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -902,7 +962,14 @@ def render_dashboard(df):
         df_recente = df[df["Situacao"] != "Pendente"].tail(5)
         if not df_recente.empty:
             for _, row in df_recente.iterrows():
-                status_class = "status-conforme" if row["Situacao"] == "Conforme" else "status-divergente"
+                status_map = {
+                    "Conforme": "status-conforme",
+                    "Divergente": "status-divergente",
+                    "Aprovado": "status-aprovado",
+                    "Reparo": "status-reparo",
+                    "Avaria": "status-avaria"
+                }
+                status_class = status_map.get(row["Situacao"], "status-pendente")
                 st.markdown(f"""
                 <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; font-size:13px;">
                     <span style="color:#334155; flex:1;">{row['Descricao do Produto'][:45]}...</span>
@@ -1460,6 +1527,9 @@ else:
                             'Divergentes',
                             'Pendentes',
                             'Com Foto',
+                            'Aprovados',
+                            'Reparos',
+                            'Avarias',
                             'Operador',
                             'Obra/Parada',
                             'Data/Hora'
@@ -1470,6 +1540,9 @@ else:
                             len(df_export[df_export["Situacao"] == "Divergente"]),
                             len(df_export[df_export["Situacao"] == "Pendente"]),
                             len(df_export[df_export["Foto Capturada"] == "Sim"]),
+                            len(df_export[df_export["Situacao"] == "Aprovado"]),
+                            len(df_export[df_export["Situacao"] == "Reparo"]),
+                            len(df_export[df_export["Situacao"] == "Avaria"]),
                             st.session_state.usuario_nome,
                             st.session_state.get("obra_parada", "Nao informada"),
                             time.strftime("%Y-%m-%d %H:%M:%S")
@@ -1635,6 +1708,9 @@ else:
                     conformes = len(df_export[df_export["Situacao"] == "Conforme"])
                     divergentes = len(df_export[df_export["Situacao"] == "Divergente"])
                     pendentes = len(df_export[df_export["Situacao"] == "Pendente"])
+                    aprovados = len(df_export[df_export["Situacao"] == "Aprovado"])
+                    reparos = len(df_export[df_export["Situacao"] == "Reparo"])
+                    avarias = len(df_export[df_export["Situacao"] == "Avaria"])
                     com_foto = len(df_export[df_export["Foto Capturada"] == "Sim"])
 
                     elements.append(Paragraph(
@@ -1642,6 +1718,9 @@ else:
                         f"<font color='#166534'>{conformes} Conforme(s)</font> | "
                         f"<font color='#991B1B'>{divergentes} Divergente(s)</font> | "
                         f"<font color='#92400E'>{pendentes} Pendente(s)</font> | "
+                        f"<font color='#166534'>{aprovados} Aprovado(s)</font> | "
+                        f"<font color='#92400E'>{reparos} Reparo(s)</font> | "
+                        f"<font color='#991B1B'>{avarias} Avaria(s)</font> | "
                         f"{com_foto} com Foto",
                         totais_style
                     ))
@@ -1870,8 +1949,9 @@ else:
                             st.session_state.dados_conferencia.at[idx_real, "Quantidade Conferida"] = linha['Quantidade NF']
                             obs_final = f"{obs} | Classificacao: {classificacao}".strip(" |") if obs else f"Classificacao: {classificacao}"
                             st.session_state.dados_conferencia.at[idx_real, "Observacoes"] = obs_final
-                            st.session_state.dados_conferencia.at[idx_real, "Situacao"] = "Conforme"
-                            st.toast(f"✅ Item confirmado como Conforme - {classificacao}!")
+                            # Status = classificacao (Aprovado/Reparo/Avaria) para aparecer nos filtros
+                            st.session_state.dados_conferencia.at[idx_real, "Situacao"] = classificacao
+                            st.toast(f"✅ Item confirmado como {classificacao}!")
                             safe_rerun()
 
                     with col_btn2:
@@ -1879,8 +1959,13 @@ else:
                             st.session_state.dados_conferencia.at[idx_real, "Quantidade Conferida"] = qtd_conf
                             obs_final = f"{obs} | Classificacao: {classificacao}".strip(" |") if obs else f"Classificacao: {classificacao}"
                             st.session_state.dados_conferencia.at[idx_real, "Observacoes"] = obs_final
-                            st.session_state.dados_conferencia.at[idx_real, "Situacao"] = "Divergente"
-                            st.toast(f"⚠️ Divergencia registrada - {classificacao}!")
+                            # Se quantidade diferente, marca como Divergente + classificacao
+                            # Se quantidade igual, usa a classificacao diretamente
+                            if qtd_conf != linha['Quantidade NF']:
+                                st.session_state.dados_conferencia.at[idx_real, "Situacao"] = f"Divergente - {classificacao}"
+                            else:
+                                st.session_state.dados_conferencia.at[idx_real, "Situacao"] = classificacao
+                            st.toast(f"⚠️ Atualizado: {classificacao}!")
                             safe_rerun()
 
                     with col_btn3:
@@ -1888,13 +1973,13 @@ else:
                             st.session_state.dados_conferencia.at[idx_real, "Quantidade Conferida"] = qtd_conf
                             obs_final = f"{obs} | Classificacao: {classificacao}".strip(" |") if obs else f"Classificacao: {classificacao}"
                             st.session_state.dados_conferencia.at[idx_real, "Observacoes"] = obs_final
-                            situacao_final = "Conforme" if qtd_conf == linha['Quantidade NF'] else "Divergente"
-                            st.session_state.dados_conferencia.at[idx_real, "Situacao"] = situacao_final
+                            # Status = classificacao escolhida (Aprovado/Reparo/Avaria)
+                            st.session_state.dados_conferencia.at[idx_real, "Situacao"] = classificacao
 
                             # ---- BLOCO 3: INSERT/UPDATE VIA SQLALCHEMY COM FOTO ----
                             foto_bytes = st.session_state.fotos_postadas.get(idx_real)
                             ok = salvar_item_completo(
-                                idx_real, linha, qtd_conf, obs_final, situacao_final, foto_bytes
+                                idx_real, linha, qtd_conf, obs_final, classificacao, foto_bytes
                             )
                             if ok:
                                 st.toast("💾 Dados gravados no CockroachDB!")
@@ -1911,7 +1996,7 @@ else:
 
             col_f1, col_f2, col_f3 = st.columns(3)
             with col_f1:
-                filtro_status = st.multiselect("Filtrar por Status:", ["Pendente", "Conforme", "Divergente"], default=[])
+                filtro_status = st.multiselect("Filtrar por Status:", ["Pendente", "Conforme", "Divergente", "Aprovado", "Reparo", "Avaria"], default=[])
             with col_f2:
                 filtro_arquivo = st.multiselect("Filtrar por Arquivo:", df['Arquivo Origem'].unique(), default=[])
             with col_f3:
