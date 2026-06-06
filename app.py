@@ -810,16 +810,12 @@ def render_dashboard(df):
         return
 
     total = len(df)
-    conformes = len(df[df["Situacao"] == "Conforme"])
-    divergentes = len(df[df["Situacao"] == "Divergente"])
     pendentes = len(df[df["Situacao"] == "Pendente"])
     aprovados = len(df[df["Situacao"] == "Aprovado"])
     reparos = len(df[df["Situacao"] == "Reparo"])
     avarias = len(df[df["Situacao"] == "Avaria"])
     com_foto = len(df[df["Foto Capturada"] == "Sim"])
 
-    pct_conforme = (conformes / total * 100) if total > 0 else 0
-    pct_divergente = (divergentes / total * 100) if total > 0 else 0
     pct_pendente = (pendentes / total * 100) if total > 0 else 0
     pct_aprovado = (aprovados / total * 100) if total > 0 else 0
     pct_reparo = (reparos / total * 100) if total > 0 else 0
@@ -827,7 +823,7 @@ def render_dashboard(df):
 
     st.markdown("### 📊 Painel de Controle em Tempo Real")
 
-    col1, col2, col3, col4, col5, col6 = st.columns(6)
+    col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         st.markdown(f"""
         <div class="dashboard-card" style="border-top: 4px solid #0284C7;">
@@ -836,28 +832,6 @@ def render_dashboard(df):
         </div>
         """, unsafe_allow_html=True)
     with col2:
-        st.markdown(f"""
-        <div class="dashboard-card" style="border-top: 4px solid #22C55E;">
-            <div class="dashboard-metric" style="color: #22C55E;">{conformes}</div>
-            <div class="dashboard-label">Conformes</div>
-            <div style="margin-top:8px;">
-                <div class="progress-bar"><div class="progress-fill" style="width:{pct_conforme}%; background:#22C55E;"></div></div>
-                <small style="color:#64748B;">{pct_conforme:.1f}%</small>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-    with col3:
-        st.markdown(f"""
-        <div class="dashboard-card" style="border-top: 4px solid #EF4444;">
-            <div class="dashboard-metric" style="color: #EF4444;">{divergentes}</div>
-            <div class="dashboard-label">Divergentes</div>
-            <div style="margin-top:8px;">
-                <div class="progress-bar"><div class="progress-fill" style="width:{pct_divergente}%; background:#EF4444;"></div></div>
-                <small style="color:#64748B;">{pct_divergente:.1f}%</small>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-    with col4:
         st.markdown(f"""
         <div class="dashboard-card" style="border-top: 4px solid #F59E0B;">
             <div class="dashboard-metric" style="color: #F59E0B;">{pendentes}</div>
@@ -868,7 +842,7 @@ def render_dashboard(df):
             </div>
         </div>
         """, unsafe_allow_html=True)
-    with col5:
+    with col3:
         st.markdown(f"""
         <div class="dashboard-card" style="border-top: 4px solid #166534;">
             <div class="dashboard-metric" style="color: #166534;">{aprovados}</div>
@@ -879,7 +853,7 @@ def render_dashboard(df):
             </div>
         </div>
         """, unsafe_allow_html=True)
-    with col6:
+    with col4:
         st.markdown(f"""
         <div class="dashboard-card" style="border-top: 4px solid #92400E;">
             <div class="dashboard-metric" style="color: #92400E;">{reparos}</div>
@@ -890,10 +864,7 @@ def render_dashboard(df):
             </div>
         </div>
         """, unsafe_allow_html=True)
-
-    # Linha extra para Avaria
-    col_avaria, col_foto = st.columns(2)
-    with col_avaria:
+    with col5:
         st.markdown(f"""
         <div class="dashboard-card" style="border-top: 4px solid #991B1B;">
             <div class="dashboard-metric" style="color: #991B1B;">{avarias}</div>
@@ -904,9 +875,13 @@ def render_dashboard(df):
             </div>
         </div>
         """, unsafe_allow_html=True)
+
+    # Linha de fotos e auditoria visual
+    col_foto = st.columns(1)[0]
     with col_foto:
+        st.markdown("#### 📸 Auditoria Visual")
         st.markdown(f"""
-        <div class="dashboard-card" style="border-top: 4px solid #0284C7;">
+        <div class="dashboard-card">
             <div style="display:flex; justify-content:space-between; align-items:center;">
                 <div>
                     <div class="dashboard-metric" style="font-size:24px;">{com_foto}/{total}</div>
@@ -963,8 +938,7 @@ def render_dashboard(df):
         if not df_recente.empty:
             for _, row in df_recente.iterrows():
                 status_map = {
-                    "Conforme": "status-conforme",
-                    "Divergente": "status-divergente",
+                    "Pendente": "status-pendente",
                     "Aprovado": "status-aprovado",
                     "Reparo": "status-reparo",
                     "Avaria": "status-avaria"
@@ -1523,8 +1497,6 @@ else:
                     resumo_data = {
                         'Metrica': [
                             'Total de Itens',
-                            'Conformes',
-                            'Divergentes',
                             'Pendentes',
                             'Com Foto',
                             'Aprovados',
@@ -1536,8 +1508,6 @@ else:
                         ],
                         'Valor': [
                             len(df_export),
-                            len(df_export[df_export["Situacao"] == "Conforme"]),
-                            len(df_export[df_export["Situacao"] == "Divergente"]),
                             len(df_export[df_export["Situacao"] == "Pendente"]),
                             len(df_export[df_export["Foto Capturada"] == "Sim"]),
                             len(df_export[df_export["Situacao"] == "Aprovado"]),
@@ -1653,8 +1623,6 @@ else:
                     for idx, row in df_export.iterrows():
                         situacao = str(row.get("Situacao", "Pendente"))
                         situacao_color = {
-                            "Conforme": "#166534",
-                            "Divergente": "#991B1B",
                             "Pendente": "#92400E",
                             "Aprovado": "#166534",
                             "Reparo": "#92400E",
@@ -1705,8 +1673,6 @@ else:
                         alignment=TA_LEFT
                     )
                     total = len(df_export)
-                    conformes = len(df_export[df_export["Situacao"] == "Conforme"])
-                    divergentes = len(df_export[df_export["Situacao"] == "Divergente"])
                     pendentes = len(df_export[df_export["Situacao"] == "Pendente"])
                     aprovados = len(df_export[df_export["Situacao"] == "Aprovado"])
                     reparos = len(df_export[df_export["Situacao"] == "Reparo"])
@@ -1715,8 +1681,6 @@ else:
 
                     elements.append(Paragraph(
                         f"<b>Resumo:</b> {total} itens totais | "
-                        f"<font color='#166534'>{conformes} Conforme(s)</font> | "
-                        f"<font color='#991B1B'>{divergentes} Divergente(s)</font> | "
                         f"<font color='#92400E'>{pendentes} Pendente(s)</font> | "
                         f"<font color='#166534'>{aprovados} Aprovado(s)</font> | "
                         f"<font color='#92400E'>{reparos} Reparo(s)</font> | "
@@ -1853,8 +1817,6 @@ else:
 
                 status_class = {
                     "Pendente": "status-pendente",
-                    "Conforme": "status-conforme",
-                    "Divergente": "status-divergente",
                     "Aprovado": "status-aprovado",
                     "Reparo": "status-reparo",
                     "Avaria": "status-avaria"
@@ -1996,7 +1958,7 @@ else:
 
             col_f1, col_f2, col_f3 = st.columns(3)
             with col_f1:
-                filtro_status = st.multiselect("Filtrar por Status:", ["Pendente", "Conforme", "Divergente", "Aprovado", "Reparo", "Avaria"], default=[])
+                filtro_status = st.multiselect("Filtrar por Status:", ["Pendente", "Aprovado", "Reparo", "Avaria"], default=[])
             with col_f2:
                 filtro_arquivo = st.multiselect("Filtrar por Arquivo:", df['Arquivo Origem'].unique(), default=[])
             with col_f3:
