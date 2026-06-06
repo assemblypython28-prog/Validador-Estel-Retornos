@@ -60,7 +60,7 @@ def init_db():
     global DB_AVAILABLE, db_error_msg, engine, SessionLocal
     try:
         DATABASE_URL = (
-            "postgresql+psycopg2://almox:H31u6KWGzHjnu4EWXOCXrQ"
+            "cockroachdb+psycopg2://almox:H31u6KWGzHjnu4EWXOCXrQ"
             "@kooky-singer-16481.jxf.gcp-us-east1.cockroachlabs.cloud:26257"
             "/defaultdb?sslmode=require"
         )
@@ -587,7 +587,7 @@ def _extrair_danfe_por_texto(full_text, nome_arquivo):
             continue
 
         if modo_captura:
-            numeros = re.findall(r'\b\d+[\d.,]*\b', linha)
+            numeros = re.findall(r'\d+[\d.,]*', linha)
 
             desc = re.sub(r'^\d+\s+', '', linha)
             desc = re.sub(r'\s*\d+[\d.,]*.*$', '', desc)
