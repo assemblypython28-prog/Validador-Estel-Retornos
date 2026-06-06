@@ -97,6 +97,21 @@ def get_db_session():
         return SessionLocal()
     return None
 
+def listar_obras_existentes():
+    """Retorna lista de obras/paradas distintas ja salvas no banco."""
+    session = get_db_session()
+    if not session or not DB_AVAILABLE:
+        return []
+    try:
+        obras = session.query(ConferenciaItem.obra_parada).distinct().all()
+        resultado = [o[0] for o in obras if o[0] and str(o[0]).strip()]
+        return sorted(resultado)
+    except Exception:
+        return []
+    finally:
+        session.close()
+
+
 def carregar_dados_sessao():
     """Carrega itens e fotos do banco para o session_state (persistencia entre sessoes)."""
     session = get_db_session()
@@ -1244,30 +1259,48 @@ else:
         obras_salvas = listar_obras_existentes()
         obra_atual = st.session_state.get("obra_parada", "")
 
-        # Opcoes: obras existentes + Nova obra
-        opcoes_obras = ["➕ Nova obra / parada..."] + obras_salvas if obras_salvas else ["➕ Nova obra / parada..."]
+        # Opcoes: obras existentes + Cadastrar nova
+        opcoes_obras = ["📝 Cadastrar nova obra..."] + obras_salvas if obras_salvas else ["📝 Cadastrar nova obra..."]
         # Pre-seleciona a obra atual se existir na lista
         idx_pre = 0
         if obra_atual and obra_atual in obras_salvas:
             idx_pre = obras_salvas.index(obra_atual) + 1
 
         obra_selecionada = st.selectbox(
-            "Selecione obra em andamento:",
+            "🔽 Selecione obra em andamento:",
             options=opcoes_obras,
             index=idx_pre,
             key="select_obra"
         )
 
-        if obra_selecionada == "➕ Nova obra / parada...":
-            obra_input = st.text_input(
-                "Informe a Obra ou Parada em auditoria:",
-                value=obra_atual,
-                placeholder="Ex: Obra Centro - Parada 03",
-                key="obra_parada_input"
-            )
-            if obra_input != st.session_state.get("obra_parada", ""):
-                st.session_state.obra_parada = obra_input
-                salvar_config({"obra_parada": obra_input})
+        if obra_selecionada == "📝 Cadastrar nova obra...":
+            st.markdown("""
+            <div style="background:#FEF3C7; border:1px solid #F59E0B; border-radius:8px; padding:10px; margin-bottom:8px;">
+                <span style="color:#92400E; font-weight:600;">✏️ Modo Cadastro</span><br>
+                <small>Digite o nome da nova obra/parada abaixo</small>
+            </div>
+            """, unsafe_allow_html=True)
+
+            col_nova1, col_nova2 = st.columns([3, 1])
+            with col_nova1:
+                obra_input = st.text_input(
+                    "Nome da nova Obra/Parada:",
+                    value=obra_atual,
+                    placeholder="Ex: Obra Centro - Parada 03",
+                    key="obra_parada_input",
+                    label_visibility="collapsed"
+                )
+            with col_nova2:
+                if st.button("💾 Salvar", type="primary", key="btn_salvar_obra"):
+                    if obra_input and obra_input.strip():
+                        nova_obra = obra_input.strip()
+                        st.session_state.obra_parada = nova_obra
+                        salvar_config({"obra_parada": nova_obra})
+                        st.success(f"✅ Obra cadastrada: {nova_obra}")
+                        st.toast("📍 Nova obra registrada! Selecione-a na lista.")
+                        safe_rerun()
+                    else:
+                        st.warning("⚠️ Digite um nome para a obra.")
         else:
             if obra_selecionada != st.session_state.get("obra_parada", ""):
                 st.session_state.obra_parada = obra_selecionada
@@ -1277,8 +1310,8 @@ else:
                     carregar_dados_sessao()
                     st.toast(f"📂 Obra '{obra_selecionada}' carregada!")
 
-        if st.session_state.get("obra_parada"):
-            st.success(f"✅ Obra/Parada: {st.session_state.obra_parada}")
+        if st.session_state.get("obra_parada") and obra_selecionada != "📝 Cadastrar nova obra...":
+            st.success(f"✅ Obra/Parada ativa: {st.session_state.obra_parada}")
         st.markdown("---")
         # ------------------------------------------
 
