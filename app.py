@@ -1,3 +1,4 @@
+
 import os
 
 
@@ -1375,7 +1376,7 @@ else:
         )
 
         if arquivos_entrada:
-            if st.button("⚡ Processar Carga em Lote", type="primary"):
+            if st.button("⚡ Processar e Gravar Carga no Banco", type="primary"):
                 all_records = []
                 arquivos_processados = 0
                 arquivos_com_erro = []
@@ -1421,38 +1422,38 @@ else:
                             divergencias = [r for r in registros_consolidados if "divergentes" in r.get("Observacoes", "")]
                             if divergencias:
                                 st.warning(f"⚠️ {len(divergencias)} item(s) com quantidades divergentes foram SOMADOS.")
+
+                        # ---- GRAVAR CARGA NO BANCO AUTOMATICAMENTE ----
+                        if DB_AVAILABLE and st.session_state.get("obra_parada"):
+                            with st.spinner("💾 Gravando carga no banco de dados..."):
+                                salvos = 0
+                                erros = 0
+                                for idx, row in df_novo.iterrows():
+                                    ok = salvar_item_completo(
+                                        idx, row,
+                                        float(row.get("Quantidade NF", 0)),
+                                        row.get("Observacoes", ""),
+                                        "Pendente",  # status inicial ao importar
+                                        None  # sem foto ainda
+                                    )
+                                    if ok:
+                                        salvos += 1
+                                    else:
+                                        erros += 1
+                                st.success(f"✅ {salvos} item(s) gravado(s) no CockroachDB!")
+                                if erros > 0:
+                                    st.warning(f"⚠️ {erros} item(s) com erro ao gravar.")
+                        elif not DB_AVAILABLE:
+                            st.warning("⚠️ Banco indisponível. Itens ficaram apenas em memória.")
+                        elif not st.session_state.get("obra_parada"):
+                            st.warning("⚠️ Defina a Obra/Parada antes de gravar no banco.")
+
                         safe_rerun()
                     else:
                         st.error("❌ Nenhum item foi extraido dos documentos.")
                         st.info("💡 Verifique se os PDFs sao DANFEs ou se as planilhas tem colunas de descricao e quantidade.")
 
-        # ---- SALVAR CARGA NO BANCO (persistencia) ----
-        if not st.session_state.dados_conferencia.empty and DB_AVAILABLE:
-            st.markdown("---")
-            if st.button("💾 Salvar carga no banco", type="secondary", use_container_width=True):
-                df_carga = st.session_state.dados_conferencia.copy()
-                obra = st.session_state.get("obra_parada", "")
-                salvos = 0
-                erros = 0
-                with st.spinner("Sincronizando itens com o banco..."):
-                    for idx, row in df_carga.iterrows():
-                        foto_bytes = st.session_state.fotos_postadas.get(idx)
-                        ok = salvar_item_completo(
-                            idx, row,
-                            float(row.get("Quantidade Conferida", 0)),
-                            row.get("Observacoes", ""),
-                            row.get("Situacao", "Pendente"),
-                            foto_bytes
-                        )
-                        if ok:
-                            salvos += 1
-                        else:
-                            erros += 1
-                st.success(f"✅ {salvos} item(s) persistido(s) no banco!")
-                if erros > 0:
-                    st.warning(f"⚠️ {erros} item(s) com erro.")
-                st.toast("💾 Carga salva no CockroachDB!")
-        # -----------------------------------------------
+
 
         # ============================================================
         # EXPORTACAO EM EXCEL + PDF PROFISSIONAL
@@ -1905,46 +1906,43 @@ else:
                         label_visibility="collapsed"
                     )
 
-                    col_btn1, col_btn2, col_btn3 = st.columns(3)
+                    col_btn1, col_btn2 = st.columns(2)
                     with col_btn1:
-                        if st.button("✅ Confirmar", type="primary", key=f"conf_ok_{idx_real}"):
+                        if st.button("✅ Confirmar e Gravar", type="primary", key=f"conf_ok_{idx_real}"):
+                            # 1. Atualiza session_state
                             st.session_state.dados_conferencia.at[idx_real, "Quantidade Conferida"] = linha['Quantidade NF']
                             obs_final = f"{obs} | Classificacao: {classificacao}".strip(" |") if obs else f"Classificacao: {classificacao}"
                             st.session_state.dados_conferencia.at[idx_real, "Observacoes"] = obs_final
-                            # Status = classificacao (Aprovado/Reparo/Avaria) para aparecer nos filtros
                             st.session_state.dados_conferencia.at[idx_real, "Situacao"] = classificacao
-                            st.toast(f"✅ Item confirmado como {classificacao}!")
+
+                            # 2. Salva no banco de dados (incluindo foto)
+                            foto_bytes = st.session_state.fotos_postadas.get(idx_real)
+                            ok = salvar_item_completo(
+                                idx_real, linha, linha['Quantidade NF'], obs_final, classificacao, foto_bytes
+                            )
+                            if ok:
+                                st.toast(f"✅ Item confirmado como {classificacao} e gravado no banco!")
+                            else:
+                                st.toast(f"✅ Item confirmado como {classificacao} (erro ao gravar no banco)")
                             safe_rerun()
 
                     with col_btn2:
-                        if st.button("✏️ Atualizar", key=f"conf_div_{idx_real}"):
+                        if st.button("✏️ Atualizar e Gravar", key=f"conf_div_{idx_real}"):
+                            # 1. Atualiza session_state
                             st.session_state.dados_conferencia.at[idx_real, "Quantidade Conferida"] = qtd_conf
                             obs_final = f"{obs} | Classificacao: {classificacao}".strip(" |") if obs else f"Classificacao: {classificacao}"
                             st.session_state.dados_conferencia.at[idx_real, "Observacoes"] = obs_final
-                            # Se quantidade diferente, marca como Divergente + classificacao
-                            # Se quantidade igual, usa a classificacao diretamente
-                            if qtd_conf != linha['Quantidade NF']:
-                                st.session_state.dados_conferencia.at[idx_real, "Situacao"] = f"Divergente - {classificacao}"
-                            else:
-                                st.session_state.dados_conferencia.at[idx_real, "Situacao"] = classificacao
-                            st.toast(f"⚠️ Atualizado: {classificacao}!")
-                            safe_rerun()
-
-                    with col_btn3:
-                        if st.button("💾 Gravar no Banco", key=f"save_{idx_real}"):
-                            st.session_state.dados_conferencia.at[idx_real, "Quantidade Conferida"] = qtd_conf
-                            obs_final = f"{obs} | Classificacao: {classificacao}".strip(" |") if obs else f"Classificacao: {classificacao}"
-                            st.session_state.dados_conferencia.at[idx_real, "Observacoes"] = obs_final
-                            # Status = classificacao escolhida (Aprovado/Reparo/Avaria)
                             st.session_state.dados_conferencia.at[idx_real, "Situacao"] = classificacao
 
-                            # ---- BLOCO 3: INSERT/UPDATE VIA SQLALCHEMY COM FOTO ----
+                            # 2. Salva no banco de dados (incluindo foto)
                             foto_bytes = st.session_state.fotos_postadas.get(idx_real)
                             ok = salvar_item_completo(
                                 idx_real, linha, qtd_conf, obs_final, classificacao, foto_bytes
                             )
                             if ok:
-                                st.toast("💾 Dados gravados no CockroachDB!")
+                                st.toast(f"⚠️ Item atualizado como {classificacao} e gravado no banco!")
+                            else:
+                                st.toast(f"⚠️ Item atualizado como {classificacao} (erro ao gravar no banco)")
                             safe_rerun()
                     # ---------------------------------------------------------------
             else:
