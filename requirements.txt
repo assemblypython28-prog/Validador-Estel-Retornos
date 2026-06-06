@@ -22,7 +22,7 @@ mtcnn>=0.1.1
 # Banco de dados (CockroachDB / SQLAlchemy)
 sqlalchemy
 psycopg2-binary
-cockroachdb
+sqlalchemy-cockroachdb   # <-- CORRIGIDO (era apenas "cockroachdb")
 
 # PDFs e Relatórios
 PyMuPDF>=1.23.0
