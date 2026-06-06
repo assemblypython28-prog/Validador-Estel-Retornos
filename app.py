@@ -1768,6 +1768,8 @@ else:
 
                 st.session_state.item_selecionado_idx = idx_real
 
+                # ---- MOSTRA APENAS O ITEM SELECIONADO ----
+                # Busca a linha REAL no DataFrame original (df_ref) pelo indice
                 linha = df_ref.loc[idx_real]
 
                 status_class = {
