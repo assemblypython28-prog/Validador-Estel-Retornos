@@ -1,4 +1,3 @@
-
 import os
 
 
@@ -109,6 +108,26 @@ def listar_obras_existentes():
         return sorted(resultado)
     except Exception:
         return []
+    finally:
+        session.close()
+
+
+def item_ja_conferido(descricao_produto, obra_parada):
+    """Verifica se o item já foi conferido (status != Pendente) na obra atual."""
+    session = get_db_session()
+    if not session or not DB_AVAILABLE:
+        return False, None
+    try:
+        item = session.query(ConferenciaItem).filter(
+            ConferenciaItem.descricao_produto == descricao_produto,
+            ConferenciaItem.obra_parada == obra_parada,
+            ConferenciaItem.situacao != "Pendente"
+        ).first()
+        if item:
+            return True, item.situacao
+        return False, None
+    except Exception:
+        return False, None
     finally:
         session.close()
 
@@ -667,8 +686,8 @@ def extrair_linhas_danfe(pdf_file):
                                 registros.append({
                                     "Arquivo Origem": pdf_file.name,
                                     "Descricao do Produto": desc.upper(),
-                                    "Quantidade NF": qtd,
-                                    "Quantidade Conferida": 0.0,
+                                    "Quantidade NF": int(qtd),
+                                    "Quantidade Conferida": 0,
                                     "Situacao": "Pendente",
                                     "Foto Capturada": "Nao",
                                     "Observacoes": ""
@@ -741,8 +760,8 @@ def _extrair_danfe_por_texto(full_text, nome_arquivo):
                 registros.append({
                     "Arquivo Origem": nome_arquivo,
                     "Descricao do Produto": desc.upper(),
-                    "Quantidade NF": qtd,
-                    "Quantidade Conferida": 0.0,
+                    "Quantidade NF": int(qtd),
+                    "Quantidade Conferida": 0,
                     "Situacao": "Pendente",
                     "Foto Capturada": "Nao",
                     "Observacoes": ""
@@ -792,8 +811,8 @@ def extrair_linhas_excel(excel_file):
                 registros.append({
                     "Arquivo Origem": excel_file.name,
                     "Descricao do Produto": desc_val,
-                    "Quantidade NF": qtd_val,
-                    "Quantidade Conferida": 0.0,
+                    "Quantidade NF": int(qtd_val),
+                    "Quantidade Conferida": 0,
                     "Situacao": "Pendente",
                     "Foto Capturada": "Nao",
                     "Observacoes": ""
@@ -1431,7 +1450,7 @@ else:
                                 for idx, row in df_novo.iterrows():
                                     ok = salvar_item_completo(
                                         idx, row,
-                                        float(row.get("Quantidade NF", 0)),
+                                        int(row.get("Quantidade NF", 0)),
                                         row.get("Observacoes", ""),
                                         "Pendente",  # status inicial ao importar
                                         None  # sem foto ainda
@@ -1639,8 +1658,8 @@ else:
                         data.append([
                             str(idx + 1),
                             Paragraph(str(row.get("Descricao do Produto", ""))[:80], cell_style),
-                            str(row.get("Quantidade NF", "")),
-                            str(row.get("Quantidade Conferida", "")),
+                            str(int(row.get("Quantidade NF", 0))),
+                            str(int(row.get("Quantidade Conferida", 0))),
                             Paragraph(f'<font color="{situacao_color}"><b>{situacao}</b></font>', cell_center_style),
                             "📸 Sim" if tem_foto else "❌ Nao",
                             Paragraph(str(row.get("Observacoes", ""))[:100], cell_style)
@@ -1833,11 +1852,11 @@ else:
                     <div style="display:flex; gap:24px; margin-top:12px;">
                         <div>
                             <div style="font-size:11px; color:#64748B; text-transform:uppercase;">Qtd NF</div>
-                            <div style="font-size:20px; font-weight:700; color:#1E293B;">{linha['Quantidade NF']}</div>
+                            <div style="font-size:20px; font-weight:700; color:#1E293B;">{int(linha['Quantidade NF'])}</div>
                         </div>
                         <div>
                             <div style="font-size:11px; color:#64748B; text-transform:uppercase;">Conferida</div>
-                            <div style="font-size:20px; font-weight:700; color:#0284C7;">{linha['Quantidade Conferida']}</div>
+                            <div style="font-size:20px; font-weight:700; color:#0284C7;">{int(linha['Quantidade Conferida'])}</div>
                         </div>
                         <div>
                             <div style="font-size:11px; color:#64748B; text-transform:uppercase;">Foto</div>
@@ -1885,9 +1904,10 @@ else:
                 with col_form:
                     qtd_conf = st.number_input(
                         "Quantidade real descarregada:",
-                        min_value=0.0,
-                        value=float(linha['Quantidade NF']),
-                        step=0.1,
+                        min_value=0,
+                        value=int(linha['Quantidade NF']),
+                        step=1,
+                        format="%d",
                         key=f"qtd_{idx_real}"
                     )
                     obs = st.text_area(
@@ -1906,43 +1926,85 @@ else:
                         label_visibility="collapsed"
                     )
 
+                    # ---- MENSAGEM EXPLICATIVA DOS BOTÕES ----
+                    qtd_nf = int(linha['Quantidade NF'])
+                    qtd_real = int(qtd_conf)
+
+                    if qtd_real == qtd_nf:
+                        st.markdown("""
+                        <div style="background:#F0FDF4; border:1px solid #86EFAC; border-radius:8px; padding:10px; margin-bottom:12px;">
+                            <span style="color:#166534; font-weight:600;">✅ Quantidade conferida = Quantidade NF</span><br>
+                            <small>Use <b>"Conferir OK"</b> quando tudo estiver correto.</small>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"""
+                        <div style="background:#FEF3C7; border:1px solid #F59E0B; border-radius:8px; padding:10px; margin-bottom:12px;">
+                            <span style="color:#92400E; font-weight:600;">⚠️ DIVERGÊNCIA: Qtd NF = {qtd_nf} | Qtd Real = {qtd_real}</span><br>
+                            <small>Use <b>"Registrar Divergência"</b> quando a quantidade for diferente.</small>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    # ------------------------------------------
+
                     col_btn1, col_btn2 = st.columns(2)
                     with col_btn1:
-                        if st.button("✅ Confirmar e Gravar", type="primary", key=f"conf_ok_{idx_real}"):
-                            # 1. Atualiza session_state
-                            st.session_state.dados_conferencia.at[idx_real, "Quantidade Conferida"] = linha['Quantidade NF']
-                            obs_final = f"{obs} | Classificacao: {classificacao}".strip(" |") if obs else f"Classificacao: {classificacao}"
-                            st.session_state.dados_conferencia.at[idx_real, "Observacoes"] = obs_final
-                            st.session_state.dados_conferencia.at[idx_real, "Situacao"] = classificacao
-
-                            # 2. Salva no banco de dados (incluindo foto)
-                            foto_bytes = st.session_state.fotos_postadas.get(idx_real)
-                            ok = salvar_item_completo(
-                                idx_real, linha, linha['Quantidade NF'], obs_final, classificacao, foto_bytes
+                        if st.button("✅ Conferir OK", type="primary", key=f"conf_ok_{idx_real}", 
+                                    disabled=(qtd_real != qtd_nf),
+                                    help="Use quando a quantidade real for igual à da NF"):
+                            # VERIFICA SE ITEM JÁ FOI CONFERIDO
+                            ja_conferido, status_existente = item_ja_conferido(
+                                linha.get("Descricao do Produto", ""),
+                                st.session_state.get("obra_parada", "")
                             )
-                            if ok:
-                                st.toast(f"✅ Item confirmado como {classificacao} e gravado no banco!")
+                            if ja_conferido:
+                                st.error(f"❌ ITEM JÁ CONFERIDO! Status atual: {status_existente}")
+                                st.warning("⚠️ Não é possível conferir o mesmo item novamente. Use a Lista Consolidada para consultar.")
                             else:
-                                st.toast(f"✅ Item confirmado como {classificacao} (erro ao gravar no banco)")
+                                # 1. Atualiza session_state
+                                st.session_state.dados_conferencia.at[idx_real, "Quantidade Conferida"] = qtd_nf
+                                obs_final = f"{obs} | Classificacao: {classificacao}".strip(" |") if obs else f"Classificacao: {classificacao}"
+                                st.session_state.dados_conferencia.at[idx_real, "Observacoes"] = obs_final
+                                st.session_state.dados_conferencia.at[idx_real, "Situacao"] = classificacao
+
+                                # 2. Salva no banco de dados (incluindo foto)
+                                foto_bytes = st.session_state.fotos_postadas.get(idx_real)
+                                ok = salvar_item_completo(
+                                    idx_real, linha, qtd_nf, obs_final, classificacao, foto_bytes
+                                )
+                                if ok:
+                                    st.toast(f"✅ Item conferido como {classificacao} e gravado no banco!")
+                                else:
+                                    st.toast(f"✅ Item conferido como {classificacao} (erro ao gravar no banco)")
                             safe_rerun()
 
                     with col_btn2:
-                        if st.button("✏️ Atualizar e Gravar", key=f"conf_div_{idx_real}"):
-                            # 1. Atualiza session_state
-                            st.session_state.dados_conferencia.at[idx_real, "Quantidade Conferida"] = qtd_conf
-                            obs_final = f"{obs} | Classificacao: {classificacao}".strip(" |") if obs else f"Classificacao: {classificacao}"
-                            st.session_state.dados_conferencia.at[idx_real, "Observacoes"] = obs_final
-                            st.session_state.dados_conferencia.at[idx_real, "Situacao"] = classificacao
-
-                            # 2. Salva no banco de dados (incluindo foto)
-                            foto_bytes = st.session_state.fotos_postadas.get(idx_real)
-                            ok = salvar_item_completo(
-                                idx_real, linha, qtd_conf, obs_final, classificacao, foto_bytes
+                        if st.button("⚠️ Registrar Divergência", key=f"conf_div_{idx_real}",
+                                    disabled=(qtd_real == qtd_nf),
+                                    help="Use quando a quantidade real for diferente da NF"):
+                            # VERIFICA SE ITEM JÁ FOI CONFERIDO
+                            ja_conferido, status_existente = item_ja_conferido(
+                                linha.get("Descricao do Produto", ""),
+                                st.session_state.get("obra_parada", "")
                             )
-                            if ok:
-                                st.toast(f"⚠️ Item atualizado como {classificacao} e gravado no banco!")
+                            if ja_conferido:
+                                st.error(f"❌ ITEM JÁ CONFERIDO! Status atual: {status_existente}")
+                                st.warning("⚠️ Não é possível conferir o mesmo item novamente. Use a Lista Consolidada para consultar.")
                             else:
-                                st.toast(f"⚠️ Item atualizado como {classificacao} (erro ao gravar no banco)")
+                                # 1. Atualiza session_state
+                                st.session_state.dados_conferencia.at[idx_real, "Quantidade Conferida"] = qtd_real
+                                obs_final = f"DIVERGÊNCIA: Qtd NF={qtd_nf} | Qtd Real={qtd_real} | Classificacao: {classificacao}".strip(" |")
+                                st.session_state.dados_conferencia.at[idx_real, "Observacoes"] = obs_final
+                                st.session_state.dados_conferencia.at[idx_real, "Situacao"] = classificacao
+
+                                # 2. Salva no banco de dados (incluindo foto)
+                                foto_bytes = st.session_state.fotos_postadas.get(idx_real)
+                                ok = salvar_item_completo(
+                                    idx_real, linha, qtd_real, obs_final, classificacao, foto_bytes
+                                )
+                                if ok:
+                                    st.toast(f"⚠️ Divergência registrada: {classificacao} e gravado no banco!")
+                                else:
+                                    st.toast(f"⚠️ Divergência registrada: {classificacao} (erro ao gravar no banco)")
                             safe_rerun()
                     # ---------------------------------------------------------------
             else:
