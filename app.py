@@ -57,6 +57,22 @@ class ConferenciaItem(Base):
     obra_parada = Column(String(255))
     foto_blob = Column(LargeBinary)
 
+def migrar_schema(engine):
+    """Adiciona colunas novas ao schema existente sem dropar tabelas."""
+    try:
+        with engine.connect() as conn:
+            # Verifica se foto_blob existe em conferencia_itens
+            result = conn.execute(text("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'conferencia_itens' AND column_name = 'foto_blob'
+            """))
+            if not result.fetchone():
+                conn.execute(text("ALTER TABLE conferencia_itens ADD COLUMN foto_blob BYTES"))
+                conn.commit()
+    except Exception:
+        pass
+
 def init_db():
     global DB_AVAILABLE, db_error_msg, engine, SessionLocal
     try:
@@ -67,6 +83,7 @@ def init_db():
         )
         engine = create_engine(DATABASE_URL, pool_pre_ping=True, echo=False)
         Base.metadata.create_all(engine)
+        migrar_schema(engine)  # <-- migração automática de schema
         SessionLocal = sessionmaker(bind=engine)
         DB_AVAILABLE = True
     except Exception as e:
@@ -1223,15 +1240,42 @@ else:
         # ---- MEMORIA PERSISTENTE: OBRA/PARADA ----
         st.markdown("---")
         st.subheader("📍 Obra / Parada")
-        obra_input = st.text_input(
-            "Informe a Obra ou Parada em auditoria:",
-            value=st.session_state.get("obra_parada", ""),
-            placeholder="Ex: Obra Centro - Parada 03",
-            key="obra_parada_input"
+
+        obras_salvas = listar_obras_existentes()
+        obra_atual = st.session_state.get("obra_parada", "")
+
+        # Opcoes: obras existentes + Nova obra
+        opcoes_obras = ["➕ Nova obra / parada..."] + obras_salvas if obras_salvas else ["➕ Nova obra / parada..."]
+        # Pre-seleciona a obra atual se existir na lista
+        idx_pre = 0
+        if obra_atual and obra_atual in obras_salvas:
+            idx_pre = obras_salvas.index(obra_atual) + 1
+
+        obra_selecionada = st.selectbox(
+            "Selecione obra em andamento:",
+            options=opcoes_obras,
+            index=idx_pre,
+            key="select_obra"
         )
-        if obra_input != st.session_state.get("obra_parada", ""):
-            st.session_state.obra_parada = obra_input
-            salvar_config({"obra_parada": obra_input})
+
+        if obra_selecionada == "➕ Nova obra / parada...":
+            obra_input = st.text_input(
+                "Informe a Obra ou Parada em auditoria:",
+                value=obra_atual,
+                placeholder="Ex: Obra Centro - Parada 03",
+                key="obra_parada_input"
+            )
+            if obra_input != st.session_state.get("obra_parada", ""):
+                st.session_state.obra_parada = obra_input
+                salvar_config({"obra_parada": obra_input})
+        else:
+            if obra_selecionada != st.session_state.get("obra_parada", ""):
+                st.session_state.obra_parada = obra_selecionada
+                salvar_config({"obra_parada": obra_selecionada})
+                # Recarrega dados da obra selecionada automaticamente
+                if DB_AVAILABLE:
+                    carregar_dados_sessao()
+                    st.toast(f"📂 Obra '{obra_selecionada}' carregada!")
 
         if st.session_state.get("obra_parada"):
             st.success(f"✅ Obra/Parada: {st.session_state.obra_parada}")
