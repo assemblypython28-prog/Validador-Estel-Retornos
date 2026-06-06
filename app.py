@@ -1567,22 +1567,36 @@ else:
 
                 col_cam, col_form = st.columns(2)
                 with col_cam:
-                    foto_mat = st.camera_input(
-                        "📸 Foto do Material:",
-                        key=f"cam_{idx_real}"
-                    )
-                    if foto_mat:
-                        st.session_state.fotos_postadas[idx_real] = foto_mat.getvalue()
-                        st.session_state.dados_conferencia.at[idx_real, "Foto Capturada"] = "Sim"
-                        st.toast("📸 Foto armazenada!")
-                        safe_rerun()
+                    # Controle para evitar duplicacao visual: se ja tem foto, mostra ela limpa
+                    # com opcao de tirar nova. Se nao tem, mostra a camera.
+                    ja_tem_foto = idx_real in st.session_state.fotos_postadas
 
-                    if idx_real in st.session_state.fotos_postadas:
+                    if not ja_tem_foto:
+                        foto_mat = st.camera_input(
+                            "📸 Foto do Material:",
+                            key=f"cam_{idx_real}"
+                        )
+                        if foto_mat:
+                            st.session_state.fotos_postadas[idx_real] = foto_mat.getvalue()
+                            st.session_state.dados_conferencia.at[idx_real, "Foto Capturada"] = "Sim"
+                            st.toast("📸 Foto armazenada!")
+                            # NAO damos rerun aqui — deixamos o Streamlit renderizar
+                            # naturalmente na proxima interacao para evitar flicker
+                    else:
+                        st.markdown("""
+                        <div style="background:#F0FDF4; border:1px solid #86EFAC; border-radius:8px; padding:10px; margin-bottom:8px;">
+                            <span style="color:#166534; font-weight:600;">✅ Foto capturada</span>
+                        </div>
+                        """, unsafe_allow_html=True)
                         st.image(
                             st.session_state.fotos_postadas[idx_real],
                             caption="Foto atual",
                             width=300
                         )
+                        if st.button("🔄 Tirar nova foto", key=f"nova_foto_{idx_real}"):
+                            del st.session_state.fotos_postadas[idx_real]
+                            st.session_state.dados_conferencia.at[idx_real, "Foto Capturada"] = "Nao"
+                            safe_rerun()
 
                 with col_form:
                     qtd_conf = st.number_input(
